@@ -53,7 +53,7 @@ class ReleaseGenerator:
 - CAKE Queue Discipline Support
 - Wireguard Support
 - NTSync Support (Winlator/Wine NT synchronization primitives)
-- [Droidspaces](https://github.com/ravindu644/Droidspaces-OSS/releases) Support (real container namespaces)
+- [Droidspaces](https://github.com/ravindu644/Droidspaces-OSS) Support (real container namespaces)
 - Additional TCP Congestion Control Algorithms Support (BIC, Westwood, HTCP)
 - TTL/Hop-Limit Target Support (netfilter)
 - Connection Mark (connmark) Support (netfilter)
