@@ -398,7 +398,7 @@ jobs:
       - name: Generate release body
         if: steps.prepare-summary.outputs.success != '0'
         run: |
-          python3 ${{ env.SCRIPTS_DIR }}/release_generator.py ${{ env.WORKSPACE_ROOT }}/release-files/RELEASE_BODY.md
+          python3 ${{ env.SCRIPTS_DIR }}/release_generator.py ${{ env.WORKSPACE_ROOT }}/release-files/RELEASE_BODY.md --lto-mode ${{ github.event.inputs.lto_mode }}
           echo "=== Release Body ==="
           cat release-files/RELEASE_BODY.md
 
