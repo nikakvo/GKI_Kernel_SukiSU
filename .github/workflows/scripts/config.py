@@ -123,6 +123,7 @@ class BuildConfig:
     support_op8e: bool = False
     enable_ksm: bool = False
     bbr_version: str = "bbr1"
+    lto_mode: str = "thin"
     make_release: bool = True
     custom_version: Optional[str] = None
     revision: Optional[str] = None
@@ -137,6 +138,7 @@ class BuildConfig:
         self._validate_kernel_android_compat()
         self._validate_sub_level()
         self._validate_bbr_version()
+        self._validate_lto_mode()
         self._set_build_id()
 
     def _validate_android_version(self):
@@ -163,6 +165,11 @@ class BuildConfig:
         valid = ("none", "bbr1", "bbr3")
         if self.bbr_version not in valid:
             raise ValueError(f"Invalid bbr_version: {self.bbr_version}. Supported: {', '.join(valid)}")
+
+    def _validate_lto_mode(self):
+        valid = ("thin", "full")
+        if self.lto_mode not in valid:
+            raise ValueError(f"Invalid lto_mode: {self.lto_mode}. Supported: {', '.join(valid)}")
 
     def _set_build_id(self):
         if self.build_id is None:
