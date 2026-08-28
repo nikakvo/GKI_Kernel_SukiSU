@@ -184,6 +184,7 @@ CONFIG_CIFS=y
         the whole matrix into one summary table."""
         import json as _json
         report_path = self.work_dir / "PATCH_STATUS.json"
+        is_legacy = (self.work_dir / "build/build.sh").exists()
         data = {
             "config": self.config.config_name,
             "android_version": self.config.android_version,
@@ -192,6 +193,12 @@ CONFIG_CIFS=y
             "os_patch_level": self.config.os_patch_level,
             "kernel_respin": self.detected_respin or "",
             "is_lts": self.is_lts_build,
+            # thin/full only meaningful on the legacy build.sh path - the
+            # config always carries a value, but Bazel branches ignore it
+            # (mode is fixed upstream there, see kernel_builder.py's
+            # build_kernel()), so record that explicitly rather than
+            # showing a mode that wasn't actually honored.
+            "lto_mode": self.config.lto_mode if is_legacy else "n/a (bazel)",
             "patches": self.patch_status,
         }
         report_path.write_text(_json.dumps(data, indent=2), encoding="utf-8")
@@ -1781,9 +1788,12 @@ CONFIG_CIFS=y
 
     @property
     def artifact_suffix(self) -> str:
-        """LTO is always thin - no fallback mode exists anymore, so this
-        is kept only so callers referencing it (prepare_boot_images,
-        create_anykernel_zips) don't need to change."""
+        """On the legacy build.sh path, tags full-LTO artifacts so they
+        don't overwrite/get confused with a thin-LTO build of the same
+        respin. Bazel/Kleaf branches stay untagged ("") since LTO mode
+        there is fixed upstream (see build_kernel()), not user-chosen."""
+        if (self.work_dir / "build/build.sh").exists() and self.config.lto_mode == "full":
+            return "-lto-full"
         return ""
 
     def _run_build_command(self, cmd: str) -> tuple:
@@ -1823,7 +1833,7 @@ CONFIG_CIFS=y
             f"Kernel respin: {self.detected_respin or '(unknown - could not be determined)'}",
             f"Timestamp:     {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
             f"Build method:  {'Legacy build.sh' if is_legacy else 'Bazel (Kleaf)'}",
-            "LTO mode used: thin",
+            f"LTO mode used: {self.config.lto_mode if is_legacy else 'thin (Bazel default/fixed)'}",
             f"Result:        {'SUCCESS' if success else 'FAILED'}",
             f"Build time:    {build_seconds:.1f}s",
         ]
@@ -1938,7 +1948,15 @@ CONFIG_CIFS=y
 
         def _build_cmd() -> str:
             if is_legacy:
-                return "LTO=thin BUILD_CONFIG=common/build.config.gki.aarch64 build/build.sh CC=\"/usr/bin/ccache clang\""
+                # LTO mode is user-selectable here (android12/android13,
+                # legacy build.sh path only). build.sh natively supports
+                # LTO=none|thin|full, so this is a straight passthrough -
+                # no known verifier bug on this path like the Bazel one
+                # below. 'full' means a single-threaded, RAM-heavy link
+                # step (can need 16GB+ and much longer wall-clock time),
+                # so it's opt-in via --lto-mode full rather than default.
+                return (f"LTO={self.config.lto_mode} BUILD_CONFIG=common/build.config.gki.aarch64 "
+                        f"build/build.sh CC=\"/usr/bin/ccache clang\"")
             # Building //common:kernel_aarch64/Image directly (instead of
             # the full //common:kernel_aarch64_dist target) matches
             # WildKernels/GKI_KernelSU_SUSFS's own build-kernel action,
