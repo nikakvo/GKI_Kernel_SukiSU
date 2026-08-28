@@ -75,6 +75,13 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--op8e", action="store_true")
     parser.add_argument("--ksm", action="store_true", help="Enable KSM (Kernel Samepage Merging)")
     parser.add_argument("--bbr-version", choices=["none", "bbr1", "bbr3"], default="bbr1")
+    parser.add_argument("--lto-mode", choices=["thin", "full"], default="thin",
+                        help="LLVM LTO mode for the legacy build.sh path (android12/android13). "
+                             "'thin' (default) is faster and lower-memory; 'full' can squeeze out "
+                             "slightly better runtime performance/code size at the cost of a much "
+                             "longer, single-threaded, RAM-heavy link step. Ignored on Bazel/Kleaf "
+                             "branches (android14-6.1+), where the mode is fixed upstream due to a "
+                             "known ThinLTO verifier bug on some sub_levels.")
     parser.add_argument("--no-release", action="store_true")
     parser.add_argument("--custom-version", dest="custom_version", default=None)
     parser.add_argument("--revision")
@@ -121,6 +128,7 @@ def create_build_config(args: argparse.Namespace) -> BuildConfig:
         support_op8e=args.op8e,
         enable_ksm=args.ksm,
         bbr_version=args.bbr_version,
+        lto_mode=args.lto_mode,
         make_release=not args.no_release,
         custom_version=args.custom_version,
         revision=args.revision,
