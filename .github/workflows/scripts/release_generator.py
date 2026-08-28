@@ -37,7 +37,20 @@ class ReleaseGenerator:
             ksu_commit = ref['object']['sha'][:7]
         return ksu_tag, ksu_commit
 
-    def generate_body(self) -> str:
+    def generate_body(self, lto_mode: str = "thin") -> str:
+        lto_feature_line = "- Full LTO" if lto_mode == "full" else "- Thin LTO"
+        if lto_mode == "full":
+            lto_section = """- **Full LTO** — LLVM Full Link-Time Optimization (LTO) treats the entire kernel as a single translation unit during the final link, giving the compiler visibility across every object file at once for the most aggressive cross-module inlining, dead-code elimination, and devirtualization possible. Compared to Thin LTO, this squeezes out marginally better runtime performance and slightly smaller code size on the phone — the kernel itself runs a bit more efficiently. Only applies to the legacy `build.sh` branches (android12/android13) — Bazel/Kleaf branches (android14-6.1+) keep their own fixed LTO mode regardless (see this release's build summary if the matrix mixes both build methods).
+  ```
+  su -c "zcat /proc/config.gz | grep CONFIG_LTO_CLANG_FULL"
+  ```
+  Active if it shows `CONFIG_LTO_CLANG_FULL=y`"""
+        else:
+            lto_section = """- **Thin LTO** — LLVM Thin Link-Time Optimization (LTO) performs optimization across translation units, giving most of the runtime performance and code-size benefit of Full LTO on the phone, with only a marginal difference between the two once installed.
+  ```
+  su -c "zcat /proc/config.gz | grep CONFIG_LTO_CLANG_THIN"
+  ```
+  Active if it shows `CONFIG_LTO_CLANG_THIN=y`"""
         return f"""## Features
 - SUSFS v2.2.0
 - KPM Support (Kernel Patch Module)
@@ -59,7 +72,7 @@ class ReleaseGenerator:
 - Connection Mark (connmark) Support (netfilter)
 - CIFS/SMB Network Filesystem Support
 - Ptrace Leak Fix (kernels < 5.16)
-- Thin LTO
+{lto_feature_line}
 
 ## Detailed explanation
 
@@ -167,15 +180,11 @@ class ReleaseGenerator:
 
 - **Ptrace Leak Fix (kernels < 5.16)** — Backports an upstream Linux 5.16 hardening fix that closes a race where `ptrace_message` (e.g. a forked child's PID during a ptrace event) was briefly visible to other readers before the tracer was actually notified, or left stale after detach. Relevant on kernel 5.10/5.15 branches, where this isn't present natively; on 6.1+ branches it's already upstream, so nothing is patched there. There's no `/proc` or `/sys` flag to check this directly — it's a kernel-internal timing/security fix, not a toggle.
 
-- **Thin LTO** — LLVM Thin Link-Time Optimization (LTO) performs optimization across translation units while keeping the build process more parallel and memory-efficient than full LTO. It can improve kernel performance and code generation with lower build-time and memory overhead than full LTO.
-  ```
-  su -c "zcat /proc/config.gz | grep CONFIG_LTO_CLANG_THIN"
-  ```
-  Active if it shows `CONFIG_LTO_CLANG_THIN=y`
+{lto_section}
 """
 
-    def save_body(self, output_path: str = "RELEASE_BODY.md"):
-        body = self.generate_body()
+    def save_body(self, output_path: str = "RELEASE_BODY.md", lto_mode: str = "thin"):
+        body = self.generate_body(lto_mode)
         output_file = Path(output_path)
         output_file.parent.mkdir(parents=True, exist_ok=True)
         with open(output_file, 'w') as f:
@@ -184,4 +193,13 @@ class ReleaseGenerator:
 
 
 if __name__ == '__main__':
-    ReleaseGenerator().save_body(sys.argv[1] if len(sys.argv) > 1 else "RELEASE_BODY.md")
+    import argparse
+    parser = argparse.ArgumentParser(description="Generate release body")
+    parser.add_argument("output_path", nargs="?", default="RELEASE_BODY.md")
+    parser.add_argument("--lto-mode", choices=["thin", "full"], default="thin",
+                        help="Which LTO mode this release's builds used (legacy build.sh "
+                             "branches only - see kernel_builder.py). Only matters when the "
+                             "workflow's --lto-mode input was 'full'; defaults to 'thin' "
+                             "otherwise.")
+    args = parser.parse_args()
+    ReleaseGenerator().save_body(args.output_path, args.lto_mode)
