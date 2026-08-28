@@ -88,7 +88,7 @@ def build_table(reports: list, lts_map: dict = None) -> str:
     ordered_keys = [k for k in PREFERRED_ORDER if k in all_keys]
     ordered_keys += sorted(k for k in all_keys if k not in PREFERRED_ORDER)
 
-    headers = ["Build", "LTO"] + [DISPLAY_NAMES.get(k, k) for k in ordered_keys]
+    headers = ["Build", "LTO", "Peak RAM"] + [DISPLAY_NAMES.get(k, k) for k in ordered_keys]
     lines = [
         "| " + " | ".join(headers) + " |",
         "|" + "|".join(["---"] * len(headers)) + "|",
@@ -112,7 +112,8 @@ def build_table(reports: list, lts_map: dict = None) -> str:
             is_lts = bool(lts_map.get(key))
         if is_lts:
             label += " [LTS]"
-        row = [label, r.get("lto_mode", "n/a")]
+        peak_ram = r.get("peak_mem_gb")
+        row = [label, r.get("lto_mode", "n/a"), f"{peak_ram} GB" if peak_ram is not None else "n/a"]
         patches = r.get("patches", {})
         for key in ordered_keys:
             entry = patches.get(key)
