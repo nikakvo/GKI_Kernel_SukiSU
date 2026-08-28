@@ -2,6 +2,8 @@ import os
 import subprocess
 import logging
 import re
+import threading
+import time as _time
 from pathlib import Path
 from typing import Optional, Callable
 from dataclasses import dataclass, field
@@ -171,6 +173,7 @@ CONFIG_CIFS=y
         # step).
         self.patch_status: dict = {}
         self._bbrv3_applied = False
+        self._peak_mem_used_mb: Optional[float] = None
         self._setup_env()
 
     def _mark(self, name: str, status: str, detail: str = ""):
@@ -199,6 +202,7 @@ CONFIG_CIFS=y
             # build_kernel()), so record that explicitly rather than
             # showing a mode that wasn't actually honored.
             "lto_mode": self.config.lto_mode if is_legacy else "n/a (bazel)",
+            "peak_mem_gb": round(self._peak_mem_used_mb / 1024, 1) if self._peak_mem_used_mb else None,
             "patches": self.patch_status,
         }
         report_path.write_text(_json.dumps(data, indent=2), encoding="utf-8")
@@ -1796,6 +1800,55 @@ CONFIG_CIFS=y
             return "-lto-full"
         return ""
 
+    def _mem_used_mb(self) -> Optional[float]:
+        """Reads /proc/meminfo and returns current used RAM in MB
+        (MemTotal - MemAvailable), or None if unreadable (e.g. non-Linux
+        host). MemAvailable (not MemFree) is used since it already
+        accounts for reclaimable cache/buffers - the same metric the
+        kernel's own OOM-killer heuristics are based on."""
+        try:
+            info = {}
+            with open("/proc/meminfo") as f:
+                for line in f:
+                    key, _, rest = line.partition(":")
+                    info[key] = int(rest.strip().split()[0])  # kB
+            total = info.get("MemTotal")
+            avail = info.get("MemAvailable")
+            if total is None or avail is None:
+                return None
+            return (total - avail) / 1024
+        except (OSError, ValueError, IndexError):
+            return None
+
+    def _start_mem_monitor(self, interval: float = 2.0):
+        """Starts a background thread sampling used RAM every `interval`
+        seconds for the duration of the build command, so peak RAM usage
+        (particularly relevant for LTO=full's single-threaded, memory-
+        heavy link step) ends up in the build report instead of being a
+        guess. Returns (thread, stop_event) - pass both to
+        _stop_mem_monitor() once the build command finishes."""
+        stop_event = threading.Event()
+        peak = [self._mem_used_mb() or 0.0]
+
+        def _poll():
+            while not stop_event.is_set():
+                sample = self._mem_used_mb()
+                if sample is not None and sample > peak[0]:
+                    peak[0] = sample
+                stop_event.wait(interval)
+
+        thread = threading.Thread(target=_poll, daemon=True)
+        thread._peak_ref = peak  # stash for retrieval in _stop_mem_monitor
+        thread.start()
+        return thread, stop_event
+
+    def _stop_mem_monitor(self, thread, stop_event):
+        stop_event.set()
+        thread.join(timeout=5)
+        self._peak_mem_used_mb = thread._peak_ref[0]
+        if self._peak_mem_used_mb:
+            logger.info(f"Peak RAM used during build: {self._peak_mem_used_mb / 1024:.1f} GB")
+
     def _run_build_command(self, cmd: str) -> tuple:
         """Runs a (potentially very long) build command. Streams output
         live exactly as before, while also capturing it so build_kernel()
@@ -1814,11 +1867,14 @@ CONFIG_CIFS=y
             # top-to-bottom.
             print(line, flush=True)
 
+        mem_thread, mem_stop = self._start_mem_monitor()
         try:
             self.shell.run_with_callback(cmd, callback=_capture)
             return True, "\n".join(lines)
         except RuntimeError:
             return False, "\n".join(lines)
+        finally:
+            self._stop_mem_monitor(mem_thread, mem_stop)
 
     def _write_build_report(self, success: bool, build_seconds: float, is_legacy: bool):
         """Writes a short, human-readable summary of how this kernel was
@@ -1834,6 +1890,7 @@ CONFIG_CIFS=y
             f"Timestamp:     {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
             f"Build method:  {'Legacy build.sh' if is_legacy else 'Bazel (Kleaf)'}",
             f"LTO mode used: {self.config.lto_mode if is_legacy else 'thin (Bazel default/fixed)'}",
+            f"Peak RAM used:  {f'{self._peak_mem_used_mb / 1024:.1f} GB' if self._peak_mem_used_mb else '(could not be measured)'}",
             f"Result:        {'SUCCESS' if success else 'FAILED'}",
             f"Build time:    {build_seconds:.1f}s",
         ]
