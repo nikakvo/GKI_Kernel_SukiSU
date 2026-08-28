@@ -65,6 +65,11 @@ DROIDSPACES="1"
 # Congestion control: "none", "bbr1", or "bbr3" (android12/13/14/15
 # so far - see README's "BBRv3" note).
 BBR_VERSION="bbr3"
+# LTO mode: "thin" (default, faster/lower-RAM) or "full" (slower,
+# single-threaded, RAM-heavy link step, marginally better
+# perf/code-size). Only applies to android12/android13 (legacy
+# build.sh path) - ignored on Bazel branches.
+LTO_MODE="full"
 # Set to "1" to enable Baseband-guard (blocks unauthorized writes to
 # baseband/modem and other protected partitions at the LSM level).
 BBG="1"
@@ -151,7 +156,7 @@ check_dependencies
 echo "========================================"
 echo "  GKI KernelSU SUSFS - Build Menu"
 echo "========================================"
-echo "1) Default (android13 / 5.15 / 206 / 2026-06)"
+echo "1) Default (android13 / 5.15 / 211 / 2026-06)"
 echo "2) Custom (choose your own versions)"
 echo "3) All versions from matrix.json"
 echo "========================================"
@@ -233,6 +238,7 @@ for key, entries in data.items():
             --sub-level "$s" \
             --os-patch "$p" \
             --bbr-version "$BBR_VERSION" \
+            --lto-mode "$LTO_MODE" \
             --workspace "$WORKSPACE" \
             "${EXTRA_ARGS[@]}" \
             2>&1 | tee -a "$LOGFILE"; then
@@ -268,10 +274,10 @@ if [ "$BUILD_OPTION" == "2" ]; then
 
     read -rp "Android Version (e.g. android13): " ANDROID_VERSION
     read -rp "Kernel Version (e.g. 5.15): " KERNEL_VERSION
-    read -rp "Sublevel (e.g. 206): " SUB_LEVEL
+    read -rp "Sublevel (e.g. 211): " SUB_LEVEL
     read -rp "Security Patch Level (e.g. 2026-06): " OS_PATCH
     echo ""
-    echo "Check the exact respin tag here (optional, e.g. android13-5.15-2026-06_r4):"
+    echo "Check the exact respin tag here (optional, e.g. android13-5.15.211_r00):"
     echo "https://android.googlesource.com/kernel/common/+refs"
     read -rp "Kernel Tag (Enter to skip - uses the branch's latest HEAD): " KERNEL_TAG
 
@@ -307,6 +313,7 @@ python3 build.py \
     --sub-level "$SUB_LEVEL" \
     --os-patch "$OS_PATCH" \
     --bbr-version "$BBR_VERSION" \
+    --lto-mode "$LTO_MODE" \
     --workspace "$WORKSPACE" \
     "${EXTRA_ARGS[@]}" \
     2>&1 | tee "$LOGFILE"
