@@ -52,7 +52,7 @@ class ReleaseGenerator:
   ```
   Active if it shows `CONFIG_LTO_CLANG_THIN=y`"""
         return f"""## Features
-- SUSFS v2.2.0
+- SUSFS v2.3.0
 - KPM Support (Kernel Patch Module)
 - Manual Syscall Hooks
 - Magic Mount Support
