@@ -76,7 +76,7 @@ class ReleaseGenerator:
 
 ## Detailed explanation
 
-- **SUSFS v2.2.0** — Addon for hiding root using kernel-level patches combined with a userspace module (hides suspicious paths, mount points, spoofs kernel stats/uname/cmdline, and more).
+- **SUSFS v2.3.0** — Addon for hiding root using kernel-level patches combined with a userspace module (hides suspicious paths, mount points, spoofs kernel stats/uname/cmdline, and more).
 
 - **KPM Support (Kernel Patch Module)** — SukiSU KPM support is built into the kernel, allowing compatible KPM modules to be loaded at runtime.
   ```
