@@ -55,11 +55,6 @@ on:
         required: true
         type: boolean
         default: true
-      hide_stuff:
-        description: 'Apply 69_hide_stuff.patch (LineageOS/jit-zygote-cache path spoofing) - currently stale against susfs4ksu and fails the build; uncheck to skip it until ShirkNeko/SukiSU_patch fixes it'
-        required: true
-        type: boolean
-        default: true
       BBG:
         description: 'Enable Baseband-guard'
         required: true
@@ -80,11 +75,11 @@ on:
         required: true
         type: boolean
         default: false
-      disable_safemode:
-        description: 'Permanently disable KernelSU/SukiSU volume-key safe-mode detection'
-        required: false
+      hide_stuff:
+        description: 'Apply 69_hide_stuff.patch (LineageOS/jit-zygote-cache path spoofing) - currently stale against susfs4ksu and fails the build; uncheck to skip it until ShirkNeko/SukiSU_patch fixes it'
+        required: true
         type: boolean
-        default: false
+        default: true
       bbr_version:
         description: 'BBR congestion control version'
         required: true
@@ -235,12 +230,11 @@ jobs:
           [ "${{ github.event.inputs.use_mglru }}" = "false" ] && ARGS="$ARGS --no-mglru"
           [ "${{ github.event.inputs.use_psi }}" = "false" ] && ARGS="$ARGS --no-psi"
           [ "${{ github.event.inputs.use_ntsync }}" = "false" ] && ARGS="$ARGS --no-ntsync"
-          [ "${{ github.event.inputs.hide_stuff }}" = "false" ] && ARGS="$ARGS --no-hide-stuff"
           [ "${{ github.event.inputs.BBG }}" = "true" ] && ARGS="$ARGS --bbg"
           [ -n "${{ github.event.inputs.blacklist_modules }}" ] && ARGS="$ARGS --blacklist-modules \"${{ github.event.inputs.blacklist_modules }}\""
           [ "${{ github.event.inputs.DROIDSPACES }}" = "true" ] && ARGS="$ARGS --droidspaces"
           [ "${{ github.event.inputs.enable_ksm }}" = "true" ] && ARGS="$ARGS --ksm"
-          [ "${{ github.event.inputs.disable_safemode }}" = "true" ] && ARGS="$ARGS --disable-safemode"
+          [ "${{ github.event.inputs.hide_stuff }}" = "false" ] && ARGS="$ARGS --no-hide-stuff"
 
           ARGS="$ARGS --bbr-version ${{ github.event.inputs.bbr_version }}"
           ARGS="$ARGS --lto-mode ${{ github.event.inputs.lto_mode }}"
@@ -332,7 +326,13 @@ jobs:
     # conclusion "failure", which by default skips anything that needs
     # it). We still want the release made from whatever succeeded, so:
     # run unless the workflow itself was cancelled.
-    if: ${{ !cancelled() && github.event.inputs.make_release == 'true' }}
+    if: ${{ !cancelled() }}
+    # This job's first few steps (download artifacts, build summary,
+    # patch status table) always run regardless of make_release - only
+    # the actual release-creation steps further down are individually
+    # gated on `github.event.inputs.make_release == 'true'` (see their
+    # own `if:` conditions below) so the summary table still shows up
+    # in $GITHUB_STEP_SUMMARY even on a plain build-only run.
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -393,7 +393,7 @@ jobs:
 
       - name: Prepare release files
         id: prepare-release-files
-        if: steps.prepare-summary.outputs.success != '0'
+        if: steps.prepare-summary.outputs.success != '0' && github.event.inputs.make_release == 'true'
         run: |
           mkdir -p release-files
           
@@ -402,14 +402,14 @@ jobs:
           ls -la release-files/
 
       - name: Generate release body
-        if: steps.prepare-summary.outputs.success != '0'
+        if: steps.prepare-summary.outputs.success != '0' && github.event.inputs.make_release == 'true'
         run: |
           python3 ${{ env.SCRIPTS_DIR }}/release_generator.py ${{ env.WORKSPACE_ROOT }}/release-files/RELEASE_BODY.md --lto-mode ${{ github.event.inputs.lto_mode }}
           echo "=== Release Body ==="
           cat release-files/RELEASE_BODY.md
 
       - name: Resolve release tag
-        if: steps.prepare-summary.outputs.success != '0'
+        if: steps.prepare-summary.outputs.success != '0' && github.event.inputs.make_release == 'true'
         id: resolve-release-tag
         run: |
           # Default: auto-derived from SUSFS's own version (e.g. v2.2.0),
@@ -426,7 +426,7 @@ jobs:
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"
 
       - name: Create release
-        if: steps.prepare-summary.outputs.success != '0'
+        if: steps.prepare-summary.outputs.success != '0' && github.event.inputs.make_release == 'true'
         uses: softprops/action-gh-release@v3
         id: create_release
         with:
@@ -439,7 +439,7 @@ jobs:
           body_path: release-files/RELEASE_BODY.md
 
       - name: Get release URL
-        if: steps.prepare-summary.outputs.success != '0'
+        if: steps.prepare-summary.outputs.success != '0' && github.event.inputs.make_release == 'true'
         id: get-release-url
         run: |
           RELEASE_URL="https://github.com/${{ github.repository }}/releases/tag/${{ steps.resolve-release-tag.outputs.tag }}"
@@ -447,7 +447,7 @@ jobs:
           echo "Release URL: $RELEASE_URL"
 
       - name: Send Telegram Notification
-        if: ${{ github.event.inputs.send_telegram == 'true' }}
+        if: ${{ github.event.inputs.send_telegram == 'true' && github.event.inputs.make_release == 'true' }}
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
