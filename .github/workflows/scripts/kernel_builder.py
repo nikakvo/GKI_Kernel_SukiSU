@@ -1374,9 +1374,284 @@ CONFIG_CIFS=y
             )
         self._mark("susfs", "applied")
 
+    def apply_susfs_kernelsu_patch(self):
+        # susfs4ksu ships in two halves:
+        #   1) kernel_patches/50_add_susfs_...patch - patches the AOSP
+        #      kernel tree (fs/, mm/, security/selinux/...) with the
+        #      SUSFS core (fs/susfs.c) wrapped in #ifdef CONFIG_KSU_SUSFS.
+        #      apply_susfs_patches() above handles this half.
+        #   2) kernel_patches/KernelSU/10_enable_susfs_for_ksu.patch -
+        #      patches the KernelSU/SukiSU-Ultra tree itself. This is
+        #      the half that actually DEFINES the CONFIG_KSU_SUSFS
+        #      Kconfig symbol (kernel/Kconfig) and wires KernelSU's own
+        #      hooks (sucompat.c, setuid_hook.c, selinux.c, core/init.c)
+        #      to call into susfs_init()/susfs_set_current_proc_no_su()/
+        #      etc. SukiSU-Ultra's own upstream Kconfig never defines
+        #      CONFIG_KSU_SUSFS on its own.
+        #
+        # Without this second half, CONFIG_KSU_SUSFS=y written into
+        # gki_defconfig by configure_kernel() is a reference to an
+        # UNDEFINED Kconfig symbol. Kconfig silently drops unknown
+        # symbols during defconfig processing - no error, no warning.
+        # fs/Makefile's `obj-$(CONFIG_KSU_SUSFS) += susfs.o` then
+        # resolves to nothing, fs/susfs.c never gets compiled, and the
+        # kernel builds and "succeeds" while SUSFS is completely absent
+        # from the flashed Image - despite the SUSFS patch itself having
+        # applied cleanly and the pre-build config summary showing
+        # CONFIG_KSU_SUSFS=y (that summary reflects what was written to
+        # the defconfig text file, not what Kconfig actually accepted).
+        logger.info("=== Applying SUSFS<->KernelSU integration patch ===")
+        ksu_dir = self.work_dir / "KernelSU"
+        patch_file = self.susfs_dir / "kernel_patches" / "KernelSU" / "10_enable_susfs_for_ksu.patch"
+        if not ksu_dir.exists():
+            raise RuntimeError(
+                f"KernelSU checkout not found at {ksu_dir} - add_kernelsu() "
+                f"must run before apply_susfs_kernelsu_patch()."
+            )
+        if not patch_file.exists():
+            raise RuntimeError(
+                f"SUSFS<->KernelSU integration patch not found: {patch_file}\n"
+                f"susfs4ksu may have renamed/moved this file upstream. Check: "
+                f"https://github.com/ShirkNeko/susfs4ksu/tree/{self.config.kernel_branch}/kernel_patches/KernelSU\n"
+                f"This is a hard stop - continuing without this patch produces "
+                f"a kernel where CONFIG_KSU_SUSFS is never actually defined, "
+                f"so SUSFS silently compiles out entirely despite the main "
+                f"SUSFS patch and PATCH_STATUS.json both reporting success."
+            )
+        self._chdir(ksu_dir)
+        result = self._run_cmd(f"patch -p1 --fuzz=3 < {patch_file}", check=False)
+        self._chdir(self.work_dir)
+        if result.returncode != 0:
+            recovered = self._recover_susfs_init_c(ksu_dir)
+            if not recovered:
+                self._mark("susfs_kernelsu_integration", "failed", f"patch exit code {result.returncode}")
+                raise RuntimeError(
+                    f"SUSFS<->KernelSU integration patch failed to apply cleanly "
+                    f"(patch exit code {result.returncode}). The KernelSU/"
+                    f"SukiSU-Ultra tree may have diverged from what this patch "
+                    f"expects - check the build log above for rejected hunks. "
+                    f"Continuing would produce a kernel with CONFIG_KSU_SUSFS "
+                    f"silently undefined."
+                )
+            self._mark("susfs_kernelsu_integration", "applied", "manual kernel/core/init.c fixup (see log)")
+            return
+        self._mark("susfs_kernelsu_integration", "applied")
+
+    def _recover_susfs_init_c(self, ksu_dir) -> bool:
+        # Known, narrow drift point: 10_enable_susfs_for_ksu.patch was
+        # authored against an older SukiSU-Ultra. Hunks #1/#2/#4/#5/#6/#8
+        # of its kernel/core/init.c diff apply fine (they land via
+        # `patch`'s own fuzzy matching before we ever get here). Hunks
+        # #3 (include-list cleanup) and #7 (the main kernelsu_init()
+        # body reorg) don't - current SukiSU-Ultra has since inserted
+        # unrelated code in the middle of both regions (a
+        # "feature/uts_spoof.h" include, and a spoof_release/
+        # spoof_version block inside kernelsu_init()) that shifts
+        # context just enough to break the fuzzy match.
+        #
+        # This isn't optional cleanup we can skip by leaving the old
+        # code in place: kernel/Kbuild's own hunk (which DOES apply
+        # cleanly) drops hook/lsm_hook.o, hook/syscall_hook_manager.o,
+        # hook/syscall_event_bridge.o, hook/tp_marker.o, the arch-
+        # specific hook/*/syscall_hook.o, and infra/symbol_resolver.o
+        # from the build entirely - because feature/sucompat.c and
+        # hook/setuid_hook.c (already patched to a NEW calling
+        # convention by this same patch's other, successful hunks) are
+        # meant to replace them, and this patch's own successful hunks
+        # to selinux_hide.c/dispatch.c/app_profile.c/setuid_hook.c/
+        # ksud_integration.c already migrate every one of THEIR calls
+        # off that old machinery too - so leaving the old init.c body
+        # calling into it produces "undefined symbol" at link time
+        # (verified by grepping the post-patch tree for real callers of
+        # every function in every dropped file). The only exception is
+        # infra/symbol_resolver.o - see the comment near the end of
+        # this function where it gets re-added to Kbuild. The only
+        # self-consistent state is finishing the migration: gut the
+        # same calls hunk #7 would have removed, and add the same
+        # ksu_sucompat_init()/ksu_setuid_hook_init()/susfs_init() calls
+        # it would have added, via direct, targeted string edits
+        # instead of relying on `patch`'s fuzzy context matching.
+        #
+        # Each removal/insertion below targets one specific known
+        # line/block by exact string match - robust to unrelated
+        # insertions elsewhere in the function (like the spoof_version
+        # block, which is simply left untouched). If any anchor isn't
+        # found or isn't unique, we bail out and let the caller
+        # hard-fail rather than guess at a file that's drifted further
+        # than this.
+        init_c = ksu_dir / "kernel/core/init.c"
+        reject_files = list(ksu_dir.glob("**/*.rej"))
+        other_rejects = [r for r in reject_files if r.name != "init.c.rej"]
+        if other_rejects or not init_c.exists():
+            return False
+
+        content = init_c.read_text()
+        original = content
+
+        try:
+            # --- hunk #3 equivalent: includes + x86 dispatcher-safety block ---
+            content = self._replace_once(content, '#include "hook/syscall_hook.h"\n', '')
+            content = self._replace_once(
+                content,
+                '#include "infra/symbol_resolver.h"\n',
+                '#include "hook/setuid_hook.h"\n#include "feature/sucompat.h"\n',
+            )
+            x86_block = (
+                '#if defined(__x86_64__) && !defined(CONFIG_KSU_X86_PATCH_SYSCALL_DISPATCHER)\n'
+                '#include <asm/cpufeature.h>\n'
+                '#include <linux/version.h>\n'
+                '#ifndef X86_FEATURE_INDIRECT_SAFE\n'
+                '#error "FATAL: Your kernel is missing the indirect syscall bypass patches!"\n'
+                '#endif\n'
+                '#endif\n'
+            )
+            content = self._replace_once(content, x86_block, '')
+
+            # susfs.h include (hunk #1 - normally already applied by
+            # `patch` itself, but add it if this file drifted enough
+            # that even that didn't land)
+            if '#include <linux/susfs.h>' not in content:
+                include_anchor = '#include <linux/moduleparam.h>\n'
+                content = self._replace_once(
+                    content, include_anchor, include_anchor + '#include <linux/susfs.h>\n'
+                )
+
+            # --- hunk #7 equivalent: retire the old hook-manager/
+            # symbol-resolver init sequence, wire up the new one ---
+            for dead in [
+                '    ksu_init_symbol_resolver();\n\n',
+                '    ksu_syscall_hook_init();\n\n',
+                '    ksu_lsm_hook_init();\n',
+                '    ksu_app_profile_init();\n\n',
+            ]:
+                content = self._replace_once(content, dead, '')
+
+            call_anchor = '    ksu_feature_init();\n'
+            content = self._replace_once(
+                content,
+                call_anchor,
+                '#ifdef CONFIG_KSU_SUSFS\n    susfs_init();\n#endif // #ifdef CONFIG_KSU_SUSFS\n\n'
+                + call_anchor
+                + '\n    ksu_sucompat_init();\n\n    ksu_setuid_hook_init();\n',
+            )
+
+            # The late_loaded branch: both arms together called
+            # ksu_syscall_hook_manager_init (now-removed, dropped
+            # entirely), ksu_allowlist_init, ksu_throne_tracker_init,
+            # ksu_ksud_init (else-branch only), ksu_file_wrapper_init,
+            # plus late-load-only bookkeeping (escape_to_root_for_init,
+            # apply_kernelsu_rules, cache_sid, setup_ksu_cred,
+            # ksu_load_allow_list, ksu_observer_init, ksu_boot_completed,
+            # track_throne, getenforce/setenforce) that only mattered
+            # for the ksu_late_loaded distinction we're removing
+            # entirely (hunks #4/#5 already dropped its declaration and
+            # assignment). Keep the four calls both arms agreed on,
+            # drop the rest, matching hunk #7's own resolution.
+            late_loaded_re = re.compile(
+                r'    if \(ksu_late_loaded\) \{.*?\n\nvoid __exit kernelsu_exit\(void\)\n\{\n',
+                re.DOTALL,
+            )
+            if len(late_loaded_re.findall(content)) != 1:
+                return False
+            content = late_loaded_re.sub(
+                '    ksu_allowlist_init();\n\n'
+                '    ksu_throne_tracker_init();\n\n'
+                '    ksu_ksud_init();\n\n'
+                '    ksu_file_wrapper_init();\n\n'
+                '    return 0;\n'
+                '}\n\n'
+                'void __exit kernelsu_exit(void)\n{\n',
+                content,
+                count=1,
+            )
+
+            # kernelsu_exit(): its own hook-manager teardown call, and
+            # the ksu_late_loaded guard around ksu_ksud_exit() (always
+            # run it now - there's no late-load distinction left).
+            content = self._replace_once(
+                content,
+                '    // Phase 1: Stop all hooks first to prevent new callbacks\n'
+                '    ksu_syscall_hook_manager_exit();\n\n',
+                '',
+            )
+            content = self._replace_once(
+                content,
+                '    if (!ksu_late_loaded)\n        ksu_ksud_exit();\n',
+                '    ksu_ksud_exit();\n',
+            )
+        except ValueError:
+            # One of the anchors above wasn't found, or wasn't unique -
+            # this file has drifted further than we know how to handle.
+            return False
+
+        if 'ksu_late_loaded' in content:
+            # Something (e.g. a declaration/assignment `patch` didn't
+            # manage to remove) is still hanging around - don't ship a
+            # file we're not confident compiles.
+            return False
+
+        # kernel/Kbuild's own hunk (which DOES apply cleanly, separate
+        # from init.c's failure) drops infra/symbol_resolver.o along
+        # with the rest of the old hook-manager machinery, on the
+        # assumption that nothing outside that old machinery used it.
+        # That's no longer true: SukiSU-Ultra has since added
+        # feature/cpu_spoof.c and feature/uts_spoof.c (anti-detection
+        # spoofing, unrelated to SUSFS or to anything this patch
+        # touches), and kernel/kpm/compact.c, all of which call
+        # find_kernel_symbol_exact() directly - so it has to stay
+        # compiled even though nothing calls ksu_init_symbol_resolver()
+        # (the one-time fast-path warmup) anymore. Checked every other
+        # dropped object file's functions the same way (grep for
+        # external callers across the whole post-patch tree, not the
+        # pristine one - the patch's own successful hunks to
+        # selinux_hide.c/dispatch.c/app_profile.c/setuid_hook.c/
+        # ksud_integration.c already migrate them off the rest of the
+        # old hook machinery) - infra/symbol_resolver.o is the only one
+        # that's still a real dependency.
+        kbuild = ksu_dir / "kernel/Kbuild"
+        if kbuild.exists():
+            kbuild_content = kbuild.read_text()
+            anchor = 'kernelsu-objs += infra/su_mount_ns.o\n'
+            if (
+                'infra/symbol_resolver.o' not in kbuild_content
+                and kbuild_content.count(anchor) == 1
+            ):
+                kbuild.write_text(
+                    kbuild_content.replace(
+                        anchor, anchor + 'kernelsu-objs += infra/symbol_resolver.o\n', 1
+                    )
+                )
+
+        init_c.write_text(content)
+        for r in reject_files:
+            r.unlink()
+        logger.info(
+            "kernel/core/init.c: hunks #3/#7 of the SUSFS<->KernelSU patch "
+            "didn't match (known drift - see _recover_susfs_init_c). "
+            "Manually finished the same migration those hunks were "
+            "trying to make: retired the old hook-manager/symbol-"
+            "resolver init calls (their backing .o files are already "
+            "dropped from kernel/Kbuild by this patch's own successful "
+            "hunk) and wired up ksu_sucompat_init()/ksu_setuid_hook_init()/"
+            "susfs_init() in their place. Also re-added "
+            "infra/symbol_resolver.o to kernel/Kbuild - it's still "
+            "needed by feature/cpu_spoof.c and feature/uts_spoof.c, "
+            "which Kbuild's own hunk didn't account for."
+        )
+        return True
+
+    @staticmethod
+    def _replace_once(content: str, old: str, new: str) -> str:
+        if content.count(old) != 1:
+            raise ValueError(f"expected exactly one occurrence of {old!r}, found {content.count(old)}")
+        return content.replace(old, new, 1)
+
     def apply_sukisu_patches(self):
         logger.info("=== Applying SukiSU patches ===")
         self._chdir(self.work_dir / "common")
+        if not self.config.use_hide_stuff:
+            self._mark("sukisu_hide_stuff", "skipped", "disabled via --no-hide-stuff")
+            return
         hooks_patch = self.sukisu_patch_dir / "69_hide_stuff.patch"
         if not hooks_patch.exists():
             self._mark("sukisu_hide_stuff", "skipped", "69_hide_stuff.patch not found")
@@ -2223,6 +2498,7 @@ CONFIG_CIFS=y
             self.add_bbg()
             self.add_vendor_module_blacklist()
             self.apply_susfs_patches()
+            self.apply_susfs_kernelsu_patch()
             self.apply_sukisu_patches()
             self.apply_zram_patches()
             self.apply_task_mmu_fixes()
