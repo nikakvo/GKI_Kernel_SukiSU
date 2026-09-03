@@ -40,6 +40,46 @@ MATRIX_FILE="$REPO_DIR/../config/matrix.json"
 WORKSPACE="$HOME/gki-workspace"
 LOGFILE="$HOME/build-$(date +%Y%m%d-%H%M%S).log"
 
+# ---- CLI args ----
+# --ksu-commit <ref>: pin SukiSU-Ultra's kernel-side source to a tag/
+# commit/branch instead of leaving it on whatever the local KernelSU/
+# clone happens to already be sitting on (see KSU_COMMIT default below
+# for why that matters). Same idea as the kernelsu_commit input in the
+# GitHub Actions workflows - not hardcoded here, passed per-run instead,
+# so it always tracks whatever release you actually want that day.
+# --no-hide-stuff: skip SukiSU_patch's 69_hide_stuff.patch (LineageOS/
+# jit-zygote-cache path spoofing - cosmetic root-hiding extra, not core
+# SUSFS/SukiSU functionality). Currently stale against susfs4ksu's
+# refactored show_map_vma() (the "bypass_orig_flow:" label it expects
+# there was removed upstream), so `patch -F 3` fuzzy-matches onto an
+# unrelated label in a different function and produces dead code that
+# fails the build under -Werror=unused-*. Pass this until ShirkNeko/
+# SukiSU_patch updates it to match current susfs4ksu.
+# Usage: ./build-kernel.sh --ksu-commit v4.2.0 --no-hide-stuff
+KSU_COMMIT=""
+NO_HIDE_STUFF=""
+while [ "$#" -gt 0 ]; do
+    case "$1" in
+        --ksu-commit)
+            KSU_COMMIT="$2"
+            shift 2
+            ;;
+        --ksu-commit=*)
+            KSU_COMMIT="${1#--ksu-commit=}"
+            shift
+            ;;
+        --no-hide-stuff)
+            NO_HIDE_STUFF="1"
+            shift
+            ;;
+        *)
+            echo "Unknown argument: $1"
+            echo "Usage: $0 [--ksu-commit <tag|commit|branch>] [--no-hide-stuff]"
+            exit 1
+            ;;
+    esac
+done
+
 # ---- Default values ----
 ANDROID_VERSION="android13"
 KERNEL_VERSION="5.15"
@@ -94,6 +134,11 @@ USE_ZRAM="1"
 USE_MGLRU="1"
 USE_PSI="1"
 USE_NTSYNC="1"
+# KSU_COMMIT is set above from --ksu-commit (defaults to "" - tracks
+# whatever setup.sh/the local KernelSU/ clone happens to be on, which
+# can occasionally be inconsistent mid-refactor on main; pass
+# --ksu-commit v4.2.0 (or whatever the latest tag is) for a
+# reproducible pin - see https://github.com/SukiSU-Ultra/SukiSU-Ultra/tags
 # NOTE: there used to be an ALLOW_BAZEL flag here gating whether
 # Bazel/Kleaf-only branches (android15-6.6+, some newer android14-6.1
 # sub_levels) were allowed to build at all. Removed - kernel_builder.py
@@ -231,6 +276,8 @@ for key, entries in data.items():
         [ -z "$USE_MGLRU" ] && EXTRA_ARGS+=(--no-mglru)
         [ -z "$USE_PSI" ] && EXTRA_ARGS+=(--no-psi)
         [ -z "$USE_NTSYNC" ] && EXTRA_ARGS+=(--no-ntsync)
+        [ -n "$KSU_COMMIT" ] && EXTRA_ARGS+=(--ksu-commit "$KSU_COMMIT")
+        [ -n "$NO_HIDE_STUFF" ] && EXTRA_ARGS+=(--no-hide-stuff)
 
         if python3 build.py \
             --android "$a" \
@@ -306,6 +353,8 @@ EXTRA_ARGS=()
 [ -z "$USE_MGLRU" ] && EXTRA_ARGS+=(--no-mglru)
 [ -z "$USE_PSI" ] && EXTRA_ARGS+=(--no-psi)
 [ -z "$USE_NTSYNC" ] && EXTRA_ARGS+=(--no-ntsync)
+[ -n "$KSU_COMMIT" ] && EXTRA_ARGS+=(--ksu-commit "$KSU_COMMIT")
+[ -n "$NO_HIDE_STUFF" ] && EXTRA_ARGS+=(--no-hide-stuff)
 
 python3 build.py \
     --android "$ANDROID_VERSION" \
