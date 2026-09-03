@@ -48,6 +48,11 @@ def parse_args() -> argparse.Namespace:
                         help="Disable PSI (Pressure Stall Information). On by default.")
     parser.add_argument("--no-ntsync", action="store_true",
                         help="Disable NTSync (Winlator/Wine NT sync primitives). On by default.")
+    parser.add_argument("--no-hide-stuff", action="store_true",
+                        help="Skip SukiSU_patch's 69_hide_stuff.patch (LineageOS/jit-zygote-cache "
+                             "path spoofing). Currently stale against susfs4ksu's refactored "
+                             "show_map_vma() and fails the build under -Werror=unused-*. On by "
+                             "default (existing behavior) - pass this until upstream fixes it.")
     parser.add_argument("--bbg", action="store_true")
     parser.add_argument("--allow-bazel", action="store_true",
                         help="Allow building branches that require Bazel/Kleaf instead of the "
@@ -121,6 +126,7 @@ def create_build_config(args: argparse.Namespace) -> BuildConfig:
         use_mglru=not args.no_mglru,
         use_psi=not args.no_psi,
         use_ntsync=not args.no_ntsync,
+        use_hide_stuff=not args.no_hide_stuff,
         use_bbg=args.bbg,
         allow_bazel=args.allow_bazel,
         blacklist_modules=args.blacklist_modules,
