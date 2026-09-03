@@ -120,11 +120,11 @@ on:
         required: true
         type: boolean
         default: false
-      disable_safemode:
-        description: 'Permanently disable KernelSU/SukiSU volume-key safe-mode detection'
-        required: false
+      hide_stuff:
+        description: 'Apply 69_hide_stuff.patch (LineageOS/jit-zygote-cache path spoofing) - currently stale against susfs4ksu and fails the build; uncheck to skip it until ShirkNeko/SukiSU_patch fixes it'
+        required: true
         type: boolean
-        default: false
+        default: true
       bbr_version:
         description: 'BBR congestion control version (bbr3: android12/13/14 only - see README)'
         required: true
@@ -270,7 +270,7 @@ jobs:
           [ "${{ github.event.inputs.DROIDSPACES }}" = "true" ] && ARGS="$ARGS --droidspaces"
           [ "${{ github.event.inputs.supp_op }}" = "true" ] && ARGS="$ARGS --op8e"
           [ "${{ github.event.inputs.enable_ksm }}" = "true" ] && ARGS="$ARGS --ksm"
-          [ "${{ github.event.inputs.disable_safemode }}" = "true" ] && ARGS="$ARGS --disable-safemode"
+          [ "${{ github.event.inputs.hide_stuff }}" = "false" ] && ARGS="$ARGS --no-hide-stuff"
           ARGS="$ARGS --bbr-version ${{ github.event.inputs.bbr_version }}"
           ARGS="$ARGS --lto-mode ${{ github.event.inputs.lto_mode }}"
           [ -z "${{ github.event.inputs.kernelsu_commit }}" ] || ARGS="$ARGS --ksu-commit=${{ github.event.inputs.kernelsu_commit }}"
