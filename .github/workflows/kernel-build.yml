@@ -95,11 +95,6 @@ on:
         required: true
         type: boolean
         default: true
-      hide_stuff:
-        description: 'Apply 69_hide_stuff.patch (LineageOS/jit-zygote-cache path spoofing) - currently stale against susfs4ksu and fails the build; uncheck to skip it until ShirkNeko/SukiSU_patch fixes it'
-        required: true
-        type: boolean
-        default: true
       BBG:
         description: 'Enable Baseband-guard'
         required: true
@@ -270,7 +265,6 @@ jobs:
           [ "${{ github.event.inputs.use_mglru }}" = "false" ] && ARGS="$ARGS --no-mglru"
           [ "${{ github.event.inputs.use_psi }}" = "false" ] && ARGS="$ARGS --no-psi"
           [ "${{ github.event.inputs.use_ntsync }}" = "false" ] && ARGS="$ARGS --no-ntsync"
-          [ "${{ github.event.inputs.hide_stuff }}" = "false" ] && ARGS="$ARGS --no-hide-stuff"
           [ "${{ github.event.inputs.BBG }}" = "true" ] && ARGS="$ARGS --bbg"
           [ -n "${{ github.event.inputs.blacklist_modules }}" ] && ARGS="$ARGS --blacklist-modules \"${{ github.event.inputs.blacklist_modules }}\""
           [ "${{ github.event.inputs.DROIDSPACES }}" = "true" ] && ARGS="$ARGS --droidspaces"
