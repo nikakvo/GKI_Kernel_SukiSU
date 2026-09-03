@@ -131,6 +131,17 @@ class BuildConfig:
     disable_safemode: bool = False
     build_id: Optional[str] = None
     is_lts_build: bool = False
+    # Whether to apply SukiSU_patch's 69_hide_stuff.patch (LineageOS/
+    # jit-zygote-cache /proc path spoofing - cosmetic root-hiding extra,
+    # not core SUSFS/SukiSU functionality). Default True to preserve
+    # existing behavior, but this patch is currently stale relative to
+    # susfs4ksu's refactored show_map_vma() (the "bypass_orig_flow:"
+    # label it expects there was removed upstream), so `patch -F 3`
+    # fuzzy-matches onto an unrelated label in a different function and
+    # produces dead code that fails the build under -Werror=unused-*.
+    # Set to False (--no-hide-stuff) to skip it until ShirkNeko/
+    # SukiSU_patch updates it to match current susfs4ksu.
+    use_hide_stuff: bool = True
 
     def __post_init__(self):
         self._validate_android_version()
