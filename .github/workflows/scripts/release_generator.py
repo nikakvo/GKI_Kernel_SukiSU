@@ -83,8 +83,6 @@ class ReleaseGenerator:
   ```
   Active if `sukisu_kpm_version` is listed.
 
-- **Manual Syscall Hooks** — Low-level syscall interception method used for root management and detection evasion, offering finer control than standard hooking approaches.
-
 - **Magic Mount Support** — Overlay-based mounting system that lets root modules modify the filesystem without altering the underlying partitions directly, improving compatibility and reducing detection surface.
 
 - **BBR v3 Support (android12/13/14 only)** — Google's newer, improved successor to BBR v1 — better fairness with other flows and less bufferbloat under load. Backported via [WildKernels' kABI-compliant patch](https://github.com/WildKernels/kernel_patches/tree/main/common/bbrv3), selected in place of BBR v1 (not on top of it) via the build's `--bbr-version bbr3` option. Only wired up for `android12-5.10`/`android13-5.15`/`android14-6.1` so far, and depends on the patch applying cleanly on that specific branch/sub_level — check this release's build summary if unsure whether a given file has it; the build falls back to BBR v1 automatically if it doesn't apply.
