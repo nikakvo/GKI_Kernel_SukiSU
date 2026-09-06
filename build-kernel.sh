@@ -56,7 +56,18 @@ LOGFILE="$HOME/build-$(date +%Y%m%d-%H%M%S).log"
 # fails the build under -Werror=unused-*. Pass this until ShirkNeko/
 # SukiSU_patch updates it to match current susfs4ksu.
 # Usage: ./build-kernel.sh --ksu-commit v4.2.0 --no-hide-stuff
+# --susfs-commit <ref>: pin susfs4ksu's KernelSU-integration patch
+# (kernel_patches/KernelSU/10_enable_susfs_for_ksu.patch) to a specific
+# commit instead of tracking its moving `main` branch. That patch is
+# written against a specific SukiSU-Ultra API shape, and susfs4ksu
+# keeps evolving it independently of any given SukiSU-Ultra tag - so
+# leaving it unpinned means a build that worked yesterday can start
+# failing tomorrow (rejected hunks in sucompat.c/supercall.c/etc.) even
+# though --ksu-commit is pinned and unchanged. Pin both together for a
+# fully reproducible combination.
+# Usage: ./build-kernel.sh --ksu-commit v4.2.0 --susfs-commit bca0d23
 KSU_COMMIT=""
+SUSFS_COMMIT=""
 NO_HIDE_STUFF=""
 while [ "$#" -gt 0 ]; do
     case "$1" in
@@ -68,13 +79,21 @@ while [ "$#" -gt 0 ]; do
             KSU_COMMIT="${1#--ksu-commit=}"
             shift
             ;;
+        --susfs-commit)
+            SUSFS_COMMIT="$2"
+            shift 2
+            ;;
+        --susfs-commit=*)
+            SUSFS_COMMIT="${1#--susfs-commit=}"
+            shift
+            ;;
         --no-hide-stuff)
             NO_HIDE_STUFF="1"
             shift
             ;;
         *)
             echo "Unknown argument: $1"
-            echo "Usage: $0 [--ksu-commit <tag|commit|branch>] [--no-hide-stuff]"
+            echo "Usage: $0 [--ksu-commit <tag|commit|branch>] [--susfs-commit <commit>] [--no-hide-stuff]"
             exit 1
             ;;
     esac
@@ -277,6 +296,7 @@ for key, entries in data.items():
         [ -z "$USE_PSI" ] && EXTRA_ARGS+=(--no-psi)
         [ -z "$USE_NTSYNC" ] && EXTRA_ARGS+=(--no-ntsync)
         [ -n "$KSU_COMMIT" ] && EXTRA_ARGS+=(--ksu-commit "$KSU_COMMIT")
+        [ -n "$SUSFS_COMMIT" ] && EXTRA_ARGS+=(--susfs-commit "$SUSFS_COMMIT")
         [ -n "$NO_HIDE_STUFF" ] && EXTRA_ARGS+=(--no-hide-stuff)
 
         if python3 build.py \
@@ -354,6 +374,7 @@ EXTRA_ARGS=()
 [ -z "$USE_PSI" ] && EXTRA_ARGS+=(--no-psi)
 [ -z "$USE_NTSYNC" ] && EXTRA_ARGS+=(--no-ntsync)
 [ -n "$KSU_COMMIT" ] && EXTRA_ARGS+=(--ksu-commit "$KSU_COMMIT")
+[ -n "$SUSFS_COMMIT" ] && EXTRA_ARGS+=(--susfs-commit "$SUSFS_COMMIT")
 [ -n "$NO_HIDE_STUFF" ] && EXTRA_ARGS+=(--no-hide-stuff)
 
 python3 build.py \
