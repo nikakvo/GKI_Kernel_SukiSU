@@ -144,6 +144,21 @@ CONFIG_NETFILTER_XT_CONNMARK=y
 # === CIFS/SMB network filesystem client (kernel-level `mount -t cifs`
 # support for Samba/Windows network shares) ===
 CONFIG_CIFS=y
+
+# === BTF / eBPF / FUSE-BPF (debugging + eBPF tooling, matches
+# WildKernels' "BTF / eBPF / FUSE-BPF" feature) ===
+# CONFIG_DEBUG_INFO_BTF is already on by default in stock gki_defconfig
+# (Google added it years ago for libbpf-tools support) - listed here
+# explicitly anyway so it's documented and pinned rather than relying
+# on upstream's default never changing. CONFIG_BPF_EVENTS is also
+# very likely already on by default (standard Android BPF tracing
+# infra - netd, iorap, etc. depend on it) but costs nothing to pin
+# explicitly too. CONFIG_FUSE_BPF is the one that's actually OFF by
+# default upstream (plain `bool` with no `default y` when Google
+# introduced it) - this is the one that needed adding.
+CONFIG_DEBUG_INFO_BTF=y
+CONFIG_BPF_EVENTS=y
+CONFIG_FUSE_BPF=y
 """
 
     ZRAM_CONFIG_5_10 = "CONFIG_ZSMALLOC=y\nCONFIG_ZRAM=y\nCONFIG_MODULE_SIG=n\nCONFIG_CRYPTO_LZO=y\nCONFIG_ZRAM_DEF_COMP_LZ4KD=y\n"
@@ -2340,6 +2355,73 @@ CONFIG_CIFS=y
             logger.error(f"Error during compilation: {e}")
             return False
 
+    def _verify_expected_objects(self):
+        """Post-build sanity check: confirm specific source files we
+        expect to be compiled in actually produced a .o file, instead
+        of only trusting "the patch applied" / "CONFIG_X=y made it into
+        gki_defconfig" as proof on their own.
+
+        This is exactly the class of bug that let SUSFS report as fully
+        applied (green PATCH_STATUS.json, patch tool exit code 0) for a
+        long time while fs/susfs.o was never actually compiled in - a
+        missing CONFIG_KSU_SUSFS Kconfig *definition* further up the
+        chain (the SukiSU-Ultra side, not the patch itself) silently
+        swallowed the setting, and nothing checked the actual build
+        output to notice. See apply_susfs_kernelsu_patch()'s docstring
+        for the full story. A hard failure here, naming exactly which
+        expected object is missing, is a lot cheaper to debug than
+        rediscovering that story from scratch.
+
+        Legacy build.sh branches only for now - Bazel's sandboxed
+        intermediate outputs aren't laid out the same way, and
+        android14+/Bazel branches don't build at all yet regardless
+        (separate, known issue - see README's Bazel/Kleaf tracking).
+        """
+        if not (self.work_dir / "build/build.sh").exists():
+            return
+        obj_dir = self.work_dir / f"out/{self.config.android_version}-{self.config.kernel_version}/common"
+        if not obj_dir.exists():
+            logger.warning(
+                f"_verify_expected_objects: expected object directory "
+                f"not found ({obj_dir}) - skipping post-build "
+                f"verification (this itself may be worth investigating "
+                f"if the build otherwise reported success)."
+            )
+            return
+
+        # (description, path relative to obj_dir, always expected?)
+        # "always expected" features are ones this pipeline treats as
+        # mandatory/unconditional - add new entries here as more
+        # features gain a similarly narrow, hard-to-notice failure mode.
+        checks = [
+            ("SUSFS", "fs/susfs.o", True),
+            ("FUSE-BPF", "fs/fuse/backing.o", True),
+        ]
+
+        missing = []
+        for name, rel_path, always_expected in checks:
+            if not always_expected:
+                continue
+            obj_path = obj_dir / rel_path
+            if not obj_path.exists():
+                missing.append((name, rel_path))
+
+        if missing:
+            lines = "\n".join(f"  - {name}: expected {rel_path}, not found" for name, rel_path in missing)
+            raise RuntimeError(
+                f"Post-build verification failed - the following "
+                f"features are marked as enabled/applied but their "
+                f"expected compiled object is missing from the build "
+                f"output ({obj_dir}):\n{lines}\n"
+                f"This means the feature almost certainly did not "
+                f"actually make it into the Image, even though earlier "
+                f"steps reported success. Do not flash this build."
+            )
+        logger.info(
+            f"=== Post-build verification: all {len(checks)} expected "
+            f"object(s) found - OK ==="
+        )
+
     def patch_kpm_image(self):
         if not self.config.use_kpm or self.config.kernel_version == "6.6":
             return
@@ -2523,6 +2605,8 @@ CONFIG_CIFS=y
 
             if not self.build_kernel():
                 return BuildResult(success=False, config=self.config, message="Kernel compilation failed", build_time=time.time() - start_time)
+
+            self._verify_expected_objects()
 
             self.patch_kpm_image()
             artifacts = []
