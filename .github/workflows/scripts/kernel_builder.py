@@ -740,6 +740,64 @@ CONFIG_FUSE_BPF=y
         else:
             self._mark("ptrace_leak_fix", "applied")
 
+    @staticmethod
+    def _version_tuple(v: str):
+        return tuple(int(x) for x in v.split("."))
+
+    def apply_unicode_fix(self):
+        """Backports a fix to the kernel's generic Unicode/UTF-8
+        normalization subsystem (fs/unicode/utf8-norm.c - used by
+        case-insensitive f2fs/ext4 folders, CONFIG_UNICODE). Despite
+        living in WildKernels' kernel_patches repo alongside their
+        KernelSU-Next-specific patches, this one isn't KSU/SUSFS-
+        specific at all - it's a plain fix to stock upstream kernel
+        code, so it applies the same regardless of which KSU fork a
+        pipeline uses.
+
+        The upstream bug: utf8byte()'s decompose step advanced the
+        cursor pointer/length *before* checking whether the
+        decomposition it just looked up was empty (e.g. a zero-width
+        character decomposes to nothing) - by the time it checked for
+        an empty result, it was already inspecting the wrong position.
+        A crafted filename using a zero-width or similarly-decomposing
+        codepoint could exploit that ordering bug to make case-
+        insensitive path comparisons behave inconsistently - including
+        path checks used for root-hiding - hence "bypass".
+
+        Two variants exist because utf8lookup()'s signature changed
+        upstream at Linux 5.16 (u8c->data -> u8c->um/u8c->n). The
+        threshold below matches WildKernels' own action.yml exactly -
+        it version-sorts kernel_version against "5.16", not the "6.1"
+        in the patch filenames (those names are just imprecise).
+
+        Soft-fail like BBRv3/ptrace_leak_fix: nothing else in this
+        pipeline's SUSFS/KernelSU integration depends on this landing,
+        so a failure here shouldn't abort the whole build - just means
+        this one hardening tweak is missing, visible either way in
+        PATCH_STATUS.json.
+        """
+        logger.info("=== Applying Unicode normalization bypass fix ===")
+        below_5_16 = self._version_tuple(self.config.kernel_version) < self._version_tuple("5.16")
+        patch_name = "unicode_bypass_fix_below-5.16.patch" if below_5_16 else "unicode_bypass_fix_5.16-plus.patch"
+        patch_file = Path(__file__).parent / "patches" / patch_name
+        if not patch_file.exists():
+            logger.warning(f"Unicode bypass fix patch not found at {patch_file} - skipping")
+            self._mark("unicode_bypass_fix", "failed", "patch file missing")
+            return
+        common_dir = self.work_dir / "common"
+        self._chdir(common_dir)
+        result = self._run_cmd(f"patch -p1 -F 3 < {patch_file}", check=False)
+        self._chdir(self.work_dir)
+        if result.returncode != 0:
+            logger.warning(
+                "Unicode bypass fix did not apply cleanly - "
+                "fs/unicode/utf8-norm.c may have diverged from what "
+                "this patch expects, continuing without it"
+            )
+            self._mark("unicode_bypass_fix", "failed", "did not apply cleanly")
+        else:
+            self._mark("unicode_bypass_fix", "applied", patch_name)
+
     # NTSync (drivers/misc/ntsync.c) emulates Windows NT synchronization
     # primitives in-kernel - useful for Winlator/Wine. It's mainline as of
     # Linux 6.14, so this backports it via two patches from kernel_patches:
@@ -2567,6 +2625,7 @@ CONFIG_FUSE_BPF=y
             self._detect_kernel_respin()
             self._write_scmversion()
             self.apply_ptrace_leak_fix()
+            self.apply_unicode_fix()
             if self.config.use_ntsync:
                 self.apply_ntsync_patches()
             else:
