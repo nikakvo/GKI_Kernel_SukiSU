@@ -39,7 +39,18 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--os-patch")
     parser.add_argument("--ksu-version", choices=[v.value for v in KSUVersion], default=KSUVersion.STABLE.value)
     parser.add_argument("--ksu-commit", default=None)
-    parser.add_argument("--susfs-commit", default=None)
+    parser.add_argument("--susfs-commit", default=None,
+                        help="Pin susfs4ksu instead of tracking its branch HEAD. NOTE: "
+                             "susfs4ksu keeps a SEPARATE BRANCH per GKI version "
+                             "(gki-android12-5.10, gki-android13-5.15, ...) and each one "
+                             "contains only its own 50_add_susfs_in_gki-*.patch, so a "
+                             "commit hash is valid for exactly one branch. Accepts either "
+                             "a bare ref (validated against the branch this build needs - "
+                             "a mismatch is a hard error, not a silent wrong checkout), "
+                             "'HEAD~N', or a per-branch map so one matrix run can pin "
+                             "everything: "
+                             "--susfs-commit 'gki-android12-5.10=ec785f4,gki-android13-5.15=bca0d23'. "
+                             "Branches with no entry build from their branch HEAD.")
     parser.add_argument("--zram", action="store_true")
     parser.add_argument("--no-kpm", action="store_true")
     parser.add_argument("--no-mglru", action="store_true",
