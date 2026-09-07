@@ -201,8 +201,11 @@ class BuildConfig:
     def get_susfs_patch_filename(self) -> str:
         return f"50_add_susfs_in_gki-{self.android_version}-{self.kernel_version}.patch"
 
-    def is_lts(self) -> bool:
-        return self.sub_level == "X"
+    # NOTE: there used to be an is_lts() helper here returning
+    # `sub_level == "X"`. It had nothing to do with is_lts_build above
+    # (LTS-merge respin sourcing), was never called anywhere, and two
+    # differently-meaning "is_lts" names in one dataclass is exactly the
+    # kind of thing that gets misread later. Removed.
 
     def get_sub_level_int(self) -> Optional[int]:
         return None if self.sub_level == "X" else int(self.sub_level)
