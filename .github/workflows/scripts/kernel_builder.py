@@ -153,13 +153,25 @@ CONFIG_CIFS=y
 # on upstream's default never changing. CONFIG_BPF_EVENTS is also
 # very likely already on by default (standard Android BPF tracing
 # infra - netd, iorap, etc. depend on it) but costs nothing to pin
-# explicitly too. CONFIG_FUSE_BPF is the one that's actually OFF by
-# default upstream (plain `bool` with no `default y` when Google
-# introduced it) - this is the one that needed adding.
+# explicitly too.
+#
+# NOTE: CONFIG_FUSE_BPF is deliberately NOT in this unconditional
+# template - it only exists from android13 onwards (fs/fuse/backing.c
+# does not exist at all on android12-5.10), and writing an undefined
+# Kconfig symbol into gki_defconfig is silently dropped with no error.
+# It's written conditionally in configure_kernel() instead, and paired
+# with a matching conditional check in _verify_expected_objects().
 CONFIG_DEBUG_INFO_BTF=y
 CONFIG_BPF_EVENTS=y
-CONFIG_FUSE_BPF=y
 """
+
+    # Branches that actually have FUSE-BPF (fs/fuse/backing.c). Google
+    # introduced it on the android13 branches; android12-5.10's fs/fuse
+    # has no backing.c at all, so both the Kconfig symbol and the
+    # expected .o are absent there. Keyed by (android_version,
+    # kernel_version) so this stays explicit rather than an inequality
+    # that silently starts including a branch nobody checked.
+    FUSE_BPF_UNSUPPORTED = {("android12", "5.10")}
 
     ZRAM_CONFIG_5_10 = "CONFIG_ZSMALLOC=y\nCONFIG_ZRAM=y\nCONFIG_MODULE_SIG=n\nCONFIG_CRYPTO_LZO=y\nCONFIG_ZRAM_DEF_COMP_LZ4KD=y\n"
     ZRAM_CONFIG_COMMON = "CONFIG_CRYPTO_LZ4HC=y\nCONFIG_CRYPTO_LZ4K=y\nCONFIG_CRYPTO_LZ4KD=y\nCONFIG_CRYPTO_842=y\nCONFIG_CRYPTO_LZ4K_OPLUS=y\nCONFIG_ZRAM_WRITEBACK=y\n"
@@ -237,17 +249,159 @@ CONFIG_FUSE_BPF=y
         os.chdir(path)
         self.shell.cwd = str(path)
 
+    def _resolve_susfs_pin(self) -> Optional[str]:
+        """Picks which susfs4ksu ref to pin for THIS build's branch.
+
+        susfs4ksu is not one linear history. It keeps a separate branch
+        per GKI version (gki-android12-5.10, gki-android13-5.15, ...),
+        and each branch's kernel_patches/ contains ONLY its own
+        50_add_susfs_in_gki-<android>-<kernel>.patch. A commit hash is
+        therefore meaningful within exactly one branch: checking out an
+        android13 commit while building android12 lands on a tree whose
+        only SUSFS patch is the android13 one, and the build dies later
+        with "SUSFS patch file not found".
+
+        So --susfs-commit accepts either form:
+
+          bare ref          e.g. bca0d2333c1a...
+                            applied to whichever branch this build uses,
+                            but validated against it first (see
+                            _apply_susfs_commit) - a mismatch is a hard
+                            error, never a silent foreign checkout.
+
+          per-branch map    e.g. "gki-android12-5.10=ec785f4,
+                                  gki-android13-5.15=bca0d23"
+                            each branch gets its own pin; branches not
+                            listed build from their branch HEAD. This is
+                            what makes one matrix run able to pin every
+                            branch at once.
+        """
+        raw = (self.config.susfs_commit or "").strip()
+        if not raw:
+            return None
+        if "=" not in raw:
+            return raw
+
+        pins = {}
+        for part in raw.split(","):
+            part = part.strip()
+            if not part:
+                continue
+            branch, sep, ref = part.partition("=")
+            if not sep or not branch.strip() or not ref.strip():
+                raise RuntimeError(
+                    f"Could not parse --susfs-commit entry '{part}'. Expected "
+                    f"either a bare commit ref, or a comma-separated list of "
+                    f"<susfs-branch>=<ref> pairs, e.g. "
+                    f"'gki-android12-5.10=ec785f4,gki-android13-5.15=bca0d23'."
+                )
+            pins[branch.strip()] = ref.strip()
+
+        ref = pins.get(self.config.kernel_branch)
+        if ref is None:
+            logger.info(
+                f"--susfs-commit has no entry for {self.config.kernel_branch} "
+                f"(entries given: {', '.join(sorted(pins))}) - building this "
+                f"branch from its susfs4ksu branch HEAD instead."
+            )
+        return ref
+
     def _apply_susfs_commit(self):
-        if not self.config.susfs_commit or not self.susfs_dir.exists():
+        if not self.susfs_dir.exists():
             return
+        pin = self._resolve_susfs_pin()
+        if not pin:
+            return
+
+        branch = self.config.kernel_branch
+        prev_cwd = self.shell.cwd
         self._chdir(self.susfs_dir)
-        if self.config.susfs_commit.startswith("HEAD~"):
+        try:
             self._run_cmd("git fetch origin", check=False)
-            self._run_cmd(f"git reset --hard {self.config.susfs_commit}", check=False)
-        else:
-            self._run_cmd("git fetch origin", check=False)
-            self._run_cmd(f"git checkout {self.config.susfs_commit}", check=False)
-        self._chdir(self.workspace)
+
+            if pin.startswith("HEAD~"):
+                # Relative to the branch that was just checked out by
+                # clone_repositories(), so it is branch-correct by
+                # construction - nothing to validate.
+                self._run_cmd(f"git reset --hard {pin}", check=False)
+                logger.info(f"susfs4ksu pinned to {pin} on {branch}")
+                return
+
+            resolved = self._run_cmd(f"git rev-parse --verify '{pin}^{{commit}}'",
+                                     check=False, capture_output=True)
+            if resolved.returncode != 0:
+                raise RuntimeError(
+                    f"--susfs-commit '{pin}' does not resolve to a commit in "
+                    f"susfs4ksu ({self.susfs_dir}). Check the hash."
+                )
+            sha = (resolved.stdout or "").strip()
+
+            on_branch = self._run_cmd(f"git merge-base --is-ancestor {sha} origin/{branch}",
+                                      check=False, capture_output=True)
+            if on_branch.returncode != 0:
+                owners = self._run_cmd(
+                    f"git branch -r --contains {sha} --format='%(refname:short)'",
+                    check=False, capture_output=True,
+                )
+                owner_list = [
+                    l.strip() for l in (owners.stdout or "").splitlines()
+                    if l.strip() and "->" not in l
+                ]
+                where = (f"That commit is on: {', '.join(owner_list)}."
+                         if owner_list else
+                         "Could not determine which branch that commit belongs to.")
+                raise RuntimeError(
+                    f"--susfs-commit '{pin}' is not on susfs4ksu's "
+                    f"'{branch}' branch, which is the branch this "
+                    f"{self.config.android_version}-{self.config.kernel_version} "
+                    f"build needs.\n"
+                    f"{where}\n"
+                    f"susfs4ksu keeps one branch per GKI version and each holds "
+                    f"only its own 50_add_susfs_in_gki-*.patch, so a commit hash "
+                    f"is valid for exactly one branch. Checking this one out "
+                    f"anyway would produce a tree with the wrong SUSFS patch in "
+                    f"it, so the build stops here instead.\n"
+                    f"Either pass the equivalent commit on '{branch}', or use "
+                    f"the per-branch form to cover several branches in one run:\n"
+                    f"  --susfs-commit '{branch}=<ref>,gki-android13-5.15=<ref>'\n"
+                    f"Browse the branch at: "
+                    f"https://github.com/ShirkNeko/susfs4ksu/commits/{branch}"
+                )
+
+            self._run_cmd(f"git checkout {sha}", check=False)
+            logger.info(f"susfs4ksu pinned to {sha[:12]} on {branch}")
+        finally:
+            self._chdir(Path(prev_cwd))
+
+    def _verify_susfs_branch_layout(self):
+        """Confirms the susfs4ksu checkout actually carries the SUSFS
+        patch this build needs, before the (multi-minute) kernel source
+        sync rather than after it. The mismatch this catches is almost
+        always a branch/pin mix-up, and finding that out two minutes
+        earlier with a message naming what IS present is worth the two
+        lines it costs."""
+        patches_dir = self.susfs_dir / "kernel_patches"
+        expected = patches_dir / self.config.get_susfs_patch_filename()
+        if expected.exists():
+            return
+        available = sorted(p.name for p in patches_dir.glob("50_add_susfs_in_gki-*.patch")) \
+            if patches_dir.exists() else []
+        prev_cwd = self.shell.cwd
+        self._chdir(self.susfs_dir)
+        head = self._run_cmd("git log -1 --format='%h %s'", check=False, capture_output=True)
+        self._chdir(Path(prev_cwd))
+        raise RuntimeError(
+            f"The susfs4ksu checkout does not contain "
+            f"{self.config.get_susfs_patch_filename()}, which this "
+            f"{self.config.android_version}-{self.config.kernel_version} build "
+            f"needs.\n"
+            f"susfs4ksu is currently at: {(head.stdout or '').strip() or '(unknown)'}\n"
+            f"SUSFS patches present in that checkout: "
+            f"{', '.join(available) if available else '(none)'}\n"
+            f"Each susfs4ksu branch ships only its own GKI version's patch, so "
+            f"this means the checkout is on the wrong branch - usually a "
+            f"--susfs-commit pin taken from a different branch."
+        )
 
     def clone_repositories(self):
         logger.info("=== Cloning repositories ===")
@@ -277,6 +431,22 @@ CONFIG_FUSE_BPF=y
                     )
             else:
                 logger.info(f"{name} already exists, skipping clone")
+                if not branch:
+                    # SukiSU_patch and kernel_patches are cloned without an
+                    # explicit branch, and used to fall through this whole
+                    # block untouched - so the very first clone in a
+                    # workspace was reused forever. That is not harmless:
+                    # SukiSU_patch supplies 69_hide_stuff.patch and the
+                    # LZ4KD ZRAM sources, so a months-old checkout means
+                    # silently building old lz4kd, or a hide_stuff patch
+                    # written against a different susfs4ksu shape. Refresh
+                    # to the remote's default branch instead, and log the
+                    # resolved commit below either way so the build record
+                    # says exactly what went in.
+                    self._chdir(repo_dir)
+                    self._run_cmd("git fetch origin", check=False)
+                    self._run_cmd("git reset --hard @{u}", check=False)
+                    self._chdir(self.workspace)
                 if branch:
                     # This clone is reused across builds (cleanup-workspace.sh
                     # keeps it on purpose for speed), but the branch this
@@ -303,7 +473,32 @@ CONFIG_FUSE_BPF=y
                             f"repo sync that would fail later anyway."
                         )
         self._apply_susfs_commit()
+        self._verify_susfs_branch_layout()
+        self._log_shared_repo_revisions()
         logger.info("=== Repository cloning complete ===")
+
+    def _log_shared_repo_revisions(self):
+        """Records the exact commit each shared support repo is sitting
+        on. These live in the workspace and are reused across builds, so
+        without this the log says which repos were used but not which
+        version of them - and "it built yesterday" stops being a
+        reproducible statement."""
+        logger.info("Shared repository revisions used for this build:")
+        for name, repo_dir in [
+            ("susfs4ksu", self.susfs_dir),
+            ("SukiSU_patch", self.sukisu_patch_dir),
+            ("AnyKernel3", self.anykernel_dir),
+            ("kernel_patches", self.kernel_patches_dir),
+        ]:
+            if not repo_dir.exists():
+                logger.info(f"  {name}: (not present)")
+                continue
+            prev_cwd = self.shell.cwd
+            self._chdir(repo_dir)
+            rev = self._run_cmd("git log -1 --format='%h %cs %s'", check=False, capture_output=True)
+            self._chdir(Path(prev_cwd))
+            line = (rev.stdout or "").strip() or "(unknown)"
+            logger.info(f"  {name}: {line}")
 
     def clone_toolchain(self):
         logger.info("=== Cloning toolchain ===")
@@ -722,27 +917,90 @@ CONFIG_FUSE_BPF=y
             return
         logger.info("=== Applying ptrace leak fix (kernels < 5.16) ===")
         patch_file = Path(__file__).parent / "patches" / "gki_ptrace.patch"
-        if not patch_file.exists():
-            logger.warning(f"ptrace leak fix patch not found at {patch_file} - skipping")
-            self._mark("ptrace_leak_fix", "failed", "patch file missing")
-            return
-        common_dir = self.work_dir / "common"
-        self._chdir(common_dir)
-        result = self._run_cmd(f"patch -p1 -F 3 < {patch_file}", check=False)
-        self._chdir(self.work_dir)
-        if result.returncode != 0:
+        ok, detail = self._apply_patch_with_dry_run(patch_file, self.work_dir / "common")
+        if not ok:
             logger.warning(
-                "ptrace leak fix did not apply cleanly - kernel source may "
-                "have diverged from what this patch expects, continuing "
-                "without it"
+                f"ptrace leak fix not applied ({detail}) - kernel source may "
+                f"have diverged from what this patch expects. The tree was "
+                f"left untouched; continuing without it."
             )
-            self._mark("ptrace_leak_fix", "failed", "did not apply cleanly")
+            self._mark("ptrace_leak_fix", "failed", detail)
         else:
-            self._mark("ptrace_leak_fix", "applied")
+            self._mark("ptrace_leak_fix", "applied", detail)
 
     @staticmethod
     def _version_tuple(v: str):
         return tuple(int(x) for x in v.split("."))
+
+    def _has_fuse_bpf(self) -> bool:
+        """Whether this branch actually has FUSE-BPF (fs/fuse/backing.c).
+        See FUSE_BPF_UNSUPPORTED for why this is an explicit set."""
+        return (self.config.android_version, self.config.kernel_version) not in self.FUSE_BPF_UNSUPPORTED
+
+    def _apply_patch_with_dry_run(self, patch_file: Path, target_dir: Path,
+                                  fuzz_levels=(0, 3), extra_args: str = "") -> tuple:
+        """Applies a patch only after a --dry-run at the same fuzz level
+        confirms every hunk lands.
+
+        This matters more than it looks: `patch` is not atomic. Given a
+        patch where some hunks match and some don't, it applies the ones
+        that do, writes .rej files for the rest, and exits non-zero. A
+        caller that only checks the exit code and then logs "did not
+        apply cleanly - continuing without it" is therefore describing
+        the wrong thing: the tree is not untouched, it's half-patched.
+        For a soft-fail feature that's the difference between "this
+        hardening tweak is missing" and "this source file is now in a
+        state neither upstream nor the patch author ever tested".
+
+        Fuzz levels are tried in order and the FIRST one that dry-runs
+        clean is the one actually applied - never apply-then-retry.
+        fuzz=0 (exact context) is preferred so a clean apply is reported
+        as exactly that; fuzz=3 is the tolerant fallback for branches
+        whose surrounding context has drifted. Callers patching
+        kABI-tracked struct layouts must pass fuzz_levels=(0,) - a fuzzy
+        match there can silently land on the wrong offsets (see
+        apply_droidspaces_support()).
+
+        Returns (ok: bool, detail: str) - detail is suitable for passing
+        straight to _mark().
+        """
+        if not patch_file.exists():
+            return False, f"{patch_file.name} missing"
+        prev_cwd = self.shell.cwd
+        self._chdir(target_dir)
+        try:
+            for fuzz in fuzz_levels:
+                cmd_base = f"patch -p1 -F {fuzz} {extra_args}".rstrip()
+                dry = self._run_cmd(f"{cmd_base} --dry-run < {patch_file}",
+                                    check=False, capture_output=True)
+                if dry.returncode != 0:
+                    continue
+                applied = self._run_cmd(f"{cmd_base} < {patch_file}", check=False)
+                if applied.returncode != 0:
+                    # Dry-run passed but the real apply didn't - should be
+                    # impossible, so say so loudly rather than treating it
+                    # as an ordinary "didn't match".
+                    return False, (f"{patch_file.name} passed --dry-run at fuzz={fuzz} "
+                                   f"but failed on the real apply")
+                return True, (patch_file.name if fuzz == 0
+                              else f"{patch_file.name} (fuzz={fuzz})")
+            tried = "/".join(str(f) for f in fuzz_levels)
+            return False, f"{patch_file.name} did not apply cleanly (tried fuzz {tried}) - tree left untouched"
+        finally:
+            self._chdir(Path(prev_cwd))
+
+    def _revert_patch(self, patch_file: Path, target_dir: Path, fuzz: int = 3):
+        """Reverses a patch this pipeline applied moments earlier. Used
+        when a multi-patch feature applies its first patch successfully
+        and then fails on a later one - without this the tree keeps a
+        half-installed feature (e.g. an ntsync driver source file with
+        no Kconfig/Makefile wiring) that nothing later accounts for."""
+        prev_cwd = self.shell.cwd
+        self._chdir(target_dir)
+        try:
+            self._run_cmd(f"patch -p1 -R -F {fuzz} < {patch_file}", check=False)
+        finally:
+            self._chdir(Path(prev_cwd))
 
     def apply_unicode_fix(self):
         """Backports a fix to the kernel's generic Unicode/UTF-8
@@ -780,23 +1038,17 @@ CONFIG_FUSE_BPF=y
         below_5_16 = self._version_tuple(self.config.kernel_version) < self._version_tuple("5.16")
         patch_name = "unicode_bypass_fix_below-5.16.patch" if below_5_16 else "unicode_bypass_fix_5.16-plus.patch"
         patch_file = Path(__file__).parent / "patches" / patch_name
-        if not patch_file.exists():
-            logger.warning(f"Unicode bypass fix patch not found at {patch_file} - skipping")
-            self._mark("unicode_bypass_fix", "failed", "patch file missing")
-            return
-        common_dir = self.work_dir / "common"
-        self._chdir(common_dir)
-        result = self._run_cmd(f"patch -p1 -F 3 < {patch_file}", check=False)
-        self._chdir(self.work_dir)
-        if result.returncode != 0:
+        ok, detail = self._apply_patch_with_dry_run(patch_file, self.work_dir / "common")
+        if not ok:
             logger.warning(
-                "Unicode bypass fix did not apply cleanly - "
-                "fs/unicode/utf8-norm.c may have diverged from what "
-                "this patch expects, continuing without it"
+                f"Unicode bypass fix not applied ({detail}) - "
+                f"fs/unicode/utf8-norm.c may have diverged from what "
+                f"this patch expects. The tree was left untouched; "
+                f"continuing without it."
             )
-            self._mark("unicode_bypass_fix", "failed", "did not apply cleanly")
+            self._mark("unicode_bypass_fix", "failed", detail)
         else:
-            self._mark("unicode_bypass_fix", "applied", patch_name)
+            self._mark("unicode_bypass_fix", "applied", detail)
 
     # NTSync (drivers/misc/ntsync.c) emulates Windows NT synchronization
     # primitives in-kernel - useful for Winlator/Wine. It's mainline as of
@@ -819,16 +1071,28 @@ CONFIG_FUSE_BPF=y
             self._mark("ntsync", "skipped", "no compat patch for this branch")
             return
         common_dir = self.work_dir / "common"
-        self._chdir(common_dir)
+        applied_so_far = []
+        details = []
         for patch_file, label in [(base_patch, "driver source"), (compat_patch, "Kconfig/Makefile wiring")]:
-            result = self._run_cmd(f"patch -p1 -F 3 < {patch_file}", check=False)
-            if result.returncode != 0:
-                logger.warning(f"NTSync {label} patch failed to apply cleanly - continuing without NTSync")
-                self._mark("ntsync", "failed", f"{label} did not apply cleanly")
-                self._chdir(self.work_dir)
+            ok, detail = self._apply_patch_with_dry_run(patch_file, common_dir)
+            if not ok:
+                # Roll back anything already applied for this feature.
+                # Without this, a failure on the compat patch leaves
+                # drivers/misc/ntsync.c sitting in the tree with nothing
+                # in Kconfig/Makefile referencing it - a half-installed
+                # feature that later steps have no way to notice.
+                for done in reversed(applied_so_far):
+                    self._revert_patch(done, common_dir)
+                logger.warning(
+                    f"NTSync {label} patch not applied ({detail}) - "
+                    f"reverted the NTSync patches already applied and "
+                    f"continuing without NTSync"
+                )
+                self._mark("ntsync", "failed", f"{label}: {detail}")
                 return
-        self._chdir(self.work_dir)
-        self._mark("ntsync", "applied")
+            applied_so_far.append(patch_file)
+            details.append(detail)
+        self._mark("ntsync", "applied", "; ".join(details))
 
     def add_bbg(self):
         if not self.config.use_bbg:
@@ -895,14 +1159,12 @@ CONFIG_FUSE_BPF=y
         else:
             patch_name = "vendor_modules_blacklist_6.1_and_above.patch"
         patch_file = Path(__file__).parent / "patches" / patch_name
-        if not patch_file.exists():
-            self._mark("vendor_module_blacklist", "failed", f"{patch_name} missing")
-            return
-        result = self._run_cmd(f"patch -p1 -d {common_dir} < {patch_file}", check=False)
-        if result.returncode != 0:
-            logger.warning(f"{patch_name} did not apply cleanly - source may have "
-                          "changed, continuing without the blacklist")
-            self._mark("vendor_module_blacklist", "failed", "did not apply cleanly")
+        ok, detail = self._apply_patch_with_dry_run(patch_file, common_dir)
+        if not ok:
+            logger.warning(f"Vendor module blacklist not applied ({detail}) - source may "
+                           "have changed. The tree was left untouched; continuing "
+                           "without the blacklist.")
+            self._mark("vendor_module_blacklist", "failed", detail)
             return
         config_file = common_dir / "arch/arm64/configs/gki_defconfig"
         with open(config_file, "a") as f:
@@ -947,16 +1209,17 @@ CONFIG_FUSE_BPF=y
         different trio of ANDROID_KABI_RESERVE slots (6/7/8, 3/4/5, or
         1/2/3 - which slots are free isn't the same across every
         respin), plus a 4th "bypass" variant that sidesteps reserve
-        slots entirely (adds the fields inside a '#ifndef __GENKSYMS__'
-        block instead, so it's invisible to the kABI checksum tool
-        regardless of slot availability - added by WildKernels for
-        branches where none of the 3 slot trios are free, e.g.
-        android15-6.6). Rather than hardcoding a guess, this tries all
-        4 in order (dry-run first, strict context matching - fuzzy
-        matching here risks a false-positive "clean" apply against the
-        WRONG slots, which would silently break kABI in a different
-        way) and applies the first one that actually fits this exact
-        source tree.
+        slots entirely by hiding the new fields behind
+        '#ifndef __GENKSYMS__'. ONLY THE 3 RESERVE-SLOT VARIANTS ARE
+        USED HERE. The bypass variant is deliberately not tried - it
+        hides the fields from the checksum tool without reserving their
+        bytes in the real struct, which caused a confirmed real-device
+        bootloop (see the note above the sysvipc_variants list). Rather
+        than hardcoding a guess, this tries the 3 in order (dry-run
+        first, strict context matching - fuzzy matching here risks a
+        false-positive "clean" apply against the WRONG slots, which
+        would silently break kABI in a different way) and applies the
+        first one that actually fits this exact source tree.
 
         Only wired up for kernel_version < 6.12 (android12-5.10,
         android13-5.15, android14-6.1, android15-6.6 - the branches
@@ -973,8 +1236,8 @@ CONFIG_FUSE_BPF=y
         if self.config.kernel_version not in ("5.10", "5.15", "6.1", "6.6"):
             logger.warning(
                 f"Droidspaces support requested but not implemented yet for "
-                f"kernel {self.config.kernel_version} (only 5.10/5.15/6.1 are "
-                f"wired up) - skipping"
+                f"kernel {self.config.kernel_version} (only 5.10/5.15/6.1/6.6 "
+                f"are wired up) - skipping"
             )
             self._mark("droidspaces", "skipped", f"kernel {self.config.kernel_version} not supported yet")
             return
@@ -1753,19 +2016,23 @@ CONFIG_FUSE_BPF=y
             self._run_cmd("mkdir -p lib/lz4k_oplus", check=False)
             self._run_cmd(f"cp -r {oplus_src}/* lib/lz4k_oplus/", check=False)
         zram_patch_dir = self.sukisu_patch_dir / f"other/zram/zram_patch/{self.config.kernel_version}"
+        common_dir = self.work_dir / "common"
         zram_ok = True
         zram_found_any = False
+        details = []
         for patch in ["lz4kd.patch", "lz4k_oplus.patch"]:
             p = zram_patch_dir / patch
             if p.exists():
                 zram_found_any = True
-                result = self._run_cmd(f"patch -p1 -F 3 < {p}", check=False)
-                if result.returncode != 0:
+                ok, detail = self._apply_patch_with_dry_run(p, common_dir)
+                details.append(detail)
+                if not ok:
+                    logger.warning(f"ZRAM patch not applied ({detail}) - tree left untouched")
                     zram_ok = False
         if not zram_found_any:
             self._mark("zram_lz4kd", "failed", "no zram patch files found for this kernel version")
         else:
-            self._mark("zram_lz4kd", "applied" if zram_ok else "failed")
+            self._mark("zram_lz4kd", "applied" if zram_ok else "failed", "; ".join(details))
 
     def apply_task_mmu_fixes(self):
         logger.info("=== Applying task_mmu.c fixes ===")
@@ -1834,6 +2101,22 @@ CONFIG_FUSE_BPF=y
                 f.write("CONFIG_KSU_SUSFS_SUS_PATH=y\n")
             else:
                 f.write("CONFIG_KSU_SUSFS_SUS_PATH=n\n")
+            # FUSE-BPF: only exists from android13 onwards. Writing it on
+            # android12-5.10 would be a reference to an undefined Kconfig
+            # symbol, which Kconfig drops in silence - the exact failure
+            # mode that hid CONFIG_KSU_SUSFS never actually being defined
+            # for a long time. Keep undefined symbols out of the
+            # defconfig entirely rather than relying on them being
+            # harmless.
+            if self._has_fuse_bpf():
+                f.write("# === FUSE-BPF (android13+; fs/fuse/backing.c) ===\n")
+                f.write("CONFIG_FUSE_BPF=y\n")
+            else:
+                logger.info(
+                    f"Skipping CONFIG_FUSE_BPF - not available on "
+                    f"{self.config.android_version}-{self.config.kernel_version} "
+                    f"(fs/fuse/backing.c does not exist on this branch)"
+                )
 
         if self.config.use_zram:
             self._configure_zram()
@@ -2014,7 +2297,14 @@ CONFIG_FUSE_BPF=y
                     logger.warning(f"Config file does not exist, skipping custom_version setting: {config_file}")
 
     def show_kernel_config(self):
-        logger.info("=== Displaying kernel config list ===")
+        """Prints what this pipeline REQUESTED, by reading gki_defconfig -
+        the input file configure_kernel() appends to. It is not proof any
+        of it took effect: Kconfig drops undefined symbols and unmet
+        dependencies without a word, so a line can appear here and be
+        absent from the kernel that gets built. _verify_effective_config()
+        is the check that reads the produced .config after the build; this
+        is only a pre-build echo of the intent."""
+        logger.info("=== Requested kernel config (from gki_defconfig, pre-build) ===")
         self._chdir(self.work_dir)
         config_file = self.work_dir / "common/arch/arm64/configs/gki_defconfig"
         
@@ -2041,11 +2331,11 @@ CONFIG_FUSE_BPF=y
             "F2FS_FS_": "F2FS Compression",
         }
         
-        logger.info("Key config status:")
+        logger.info("Key config status (requested, not yet verified):")
         for prefix, name in key_configs.items():
             found = [c for c in config_lines if prefix in c]
             if found:
-                status = "enabled"
+                status = "requested"
             else:
                 status = "not configured"
             logger.info(f"  [{status}] {name}")
@@ -2245,53 +2535,24 @@ CONFIG_FUSE_BPF=y
         report_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
         logger.info(f"Build report written to: {report_path}")
 
-    def remove_protected_exports(self):
-        """Removes ABI protected-exports enforcement for Bazel builds.
-        Google's official abi_gki_protected_exports_* lists (and the
-        protected_exports_list/protected_modules wiring in BUILD.bazel/
-        modules.bzl) exist so *Google's own* GKI doesn't accidentally
-        break symbols vendor modules already depend on. A custom
-        KernelSU/SUSFS kernel isn't trying to stay protected-export
-        compatible with stock GKI, so this enforcement only gets in the
-        way. Confirmed against WildKernels/GKI_KernelSU_SUSFS's own build
-        pipeline, which does the exact same removal. This is separate
-        from (and complementary to) --nokmi_symbol_list_strict_mode in
-        build_kernel() - that covers the KMI symbol list check, this
-        covers protected-exports enforcement. No-op for the legacy
-        build.sh path (that build system doesn't have this concept)."""
-        if (self.work_dir / "build/build.sh").exists():
-            return
-        common_dir = self.work_dir / "common"
-        logger.info("=== Removing protected exports (Bazel build) ===")
-        self._run_cmd(f"rm -rf {common_dir}/android/abi_gki_protected_exports_*", check=False)
-
-        build_bazel = common_dir / "BUILD.bazel"
-        if build_bazel.exists():
-            content = build_bazel.read_text()
-            new_content = re.sub(
-                r'^\s*"protected_exports_list"\s*:\s*"android/abi_gki_protected_exports_aarch64",\s*\n',
-                '', content, flags=re.MULTILINE
-            )
-            new_content = re.sub(
-                r'^\s*protected_module_names_list\s*=\s*":gki_(?:aarch64|x86_64)_protected_module_names",\s*\n',
-                '', new_content, flags=re.MULTILINE
-            )
-            if new_content != content:
-                build_bazel.write_text(new_content)
-                logger.info("common/BUILD.bazel: removed protected_exports_list / protected_module_names_list references")
-
-        modules_bzl = common_dir / "modules.bzl"
-        if modules_bzl.exists():
-            content = modules_bzl.read_text()
-            new_content = re.sub(r'protected_modules\s*=\s*\[.*?\]', 'protected_modules = []', content, flags=re.DOTALL)
-            if new_content != content:
-                modules_bzl.write_text(new_content)
-                logger.info("common/modules.bzl: cleared protected_modules")
-
     def build_kernel(self) -> bool:
         logger.info("=== Starting kernel compilation ===")
         self._chdir(self.work_dir)
 
+        # NOTE ON SCOPE: this strips KMI_SYMBOL_LIST_STRICT_MODE from
+        # build.config.gki.aarch64, which is the LEGACY build.sh path's
+        # KMI gate (android12-5.10 / android13-5.15). So the "KMI
+        # enforcement stays ON unconditionally" statement further down
+        # applies to the Bazel/Kleaf path only - on the legacy path it is
+        # off, and has been for as long as this pipeline has existed.
+        #
+        # That is the normal arrangement for a legacy-path KernelSU/SUSFS
+        # build (the patches add exported symbols the stock list doesn't
+        # know about, and build.sh's check has no equivalent of Bazel's
+        # violation report), but it should be stated rather than implied:
+        # android12/13 builds do NOT have the symbol-list safety net that
+        # caught the Bazel bootloop. The post-build object and effective-
+        # config checks are what stands in for it here.
         build_config = self.work_dir / "common/build.config.gki.aarch64"
         if build_config.exists():
             with open(build_config, "r") as f:
@@ -2370,9 +2631,12 @@ CONFIG_FUSE_BPF=y
             #
             # IMPORTANT: KMI symbol-list strict enforcement is deliberately
             # left ON here (no --nokmi_symbol_list_strict_mode /
-            # --nokmi_symbol_list_violations_check, and protected_exports
-            # is no longer stripped - see remove_protected_exports()'s call
-            # site below). A prior build that disabled this enforcement
+            # --nokmi_symbol_list_violations_check, and Google's
+            # abi_gki_protected_exports_* lists are left in place - a
+            # remove_protected_exports() helper that stripped them used to
+            # live here, was never actually wired into build(), and has
+            # been deleted rather than left as a loaded gun).
+            # A prior build that disabled this enforcement
             # compiled successfully but caused a confirmed real-device
             # bootloop - the resulting Image's exported symbol table
             # didn't actually match what the device's vendor .ko modules
@@ -2431,11 +2695,20 @@ CONFIG_FUSE_BPF=y
         rediscovering that story from scratch.
 
         Legacy build.sh branches only for now - Bazel's sandboxed
-        intermediate outputs aren't laid out the same way, and
-        android14+/Bazel branches don't build at all yet regardless
-        (separate, known issue - see README's Bazel/Kleaf tracking).
+        intermediate outputs aren't laid out the same way (they live
+        under bazel-bin/ / bazel-out/ rather than out/<branch>/common).
+        NOTE: Bazel branches DO build now (see build_kernel()), so this
+        early return means the whole Bazel half of the matrix currently
+        has no post-build object verification at all. That gap is worth
+        closing separately - it is not "those branches don't build
+        anyway" any more.
         """
         if not (self.work_dir / "build/build.sh").exists():
+            logger.warning(
+                "Post-build object verification skipped: Bazel/Kleaf build "
+                "(output layout differs). This check currently only covers "
+                "the legacy build.sh path."
+            )
             return
         obj_dir = self.work_dir / f"out/{self.config.android_version}-{self.config.kernel_version}/common"
         if not obj_dir.exists():
@@ -2447,19 +2720,24 @@ CONFIG_FUSE_BPF=y
             )
             return
 
-        # (description, path relative to obj_dir, always expected?)
-        # "always expected" features are ones this pipeline treats as
-        # mandatory/unconditional - add new entries here as more
-        # features gain a similarly narrow, hard-to-notice failure mode.
-        checks = [
-            ("SUSFS", "fs/susfs.o", True),
-            ("FUSE-BPF", "fs/fuse/backing.o", True),
-        ]
+        # (description, path relative to obj_dir) - only features this
+        # build actually enabled AND that exist on this branch. Anything
+        # listed here is treated as mandatory: a miss is a hard failure.
+        # Add entries as more features gain a similarly narrow,
+        # hard-to-notice failure mode - but gate them the same way, or
+        # the check starts failing correct builds, which trains people
+        # to ignore it.
+        checks = [("SUSFS", "fs/susfs.o")]
+        if self._has_fuse_bpf():
+            checks.append(("FUSE-BPF", "fs/fuse/backing.o"))
+        else:
+            logger.info(
+                f"Skipping FUSE-BPF object check - not available on "
+                f"{self.config.android_version}-{self.config.kernel_version}"
+            )
 
         missing = []
-        for name, rel_path, always_expected in checks:
-            if not always_expected:
-                continue
+        for name, rel_path in checks:
             obj_path = obj_dir / rel_path
             if not obj_path.exists():
                 missing.append((name, rel_path))
@@ -2478,6 +2756,152 @@ CONFIG_FUSE_BPF=y
         logger.info(
             f"=== Post-build verification: all {len(checks)} expected "
             f"object(s) found - OK ==="
+        )
+        for name, rel_path in checks:
+            logger.info(f"      -> {name}: {rel_path}")
+
+    def _find_built_config(self) -> Optional[Path]:
+        """Locates the .config the build actually produced (not the
+        gki_defconfig we wrote into)."""
+        candidates = [
+            self.work_dir / f"out/{self.config.android_version}-{self.config.kernel_version}/common/.config",
+            self.work_dir / f"out/{self.config.android_version}-{self.config.kernel_version}/.config",
+        ]
+        for c in candidates:
+            if c.exists():
+                return c
+        found = sorted(
+            (self.work_dir / "out").glob("**/.config"),
+            key=lambda p: p.stat().st_mtime,
+            reverse=True,
+        ) if (self.work_dir / "out").exists() else []
+        return found[0] if found else None
+
+    # Symbols this pipeline writes into gki_defconfig and expects to
+    # survive into the real .config. The first element of each tuple is
+    # the symbol, the second whether a miss is fatal.
+    #
+    # Why this exists: show_kernel_config() reads gki_defconfig - the
+    # INPUT file this pipeline appends to - so it reports "enabled" for
+    # anything we wrote, whether or not Kconfig accepted it. An
+    # undefined symbol (missing Kconfig definition, unmet dependency,
+    # overridden by a `choice` group) is dropped silently, with no
+    # warning and a zero exit code. That is precisely how
+    # CONFIG_KSU_SUSFS=y sat in the defconfig for a long time while
+    # fs/susfs.o was never compiled. _verify_expected_objects() catches
+    # that for two specific files; this catches it for every feature
+    # flag at once, which is the generalisable half of the same lesson.
+    def _expected_config_symbols(self) -> list:
+        symbols = [
+            ("CONFIG_KSU", True),
+            ("CONFIG_KSU_SUSFS", True),
+            ("CONFIG_KSU_SUSFS_SUS_MOUNT", False),
+            ("CONFIG_KSU_SUSFS_SPOOF_UNAME", False),
+            ("CONFIG_WIREGUARD", False),
+            ("CONFIG_IP_SET", False),
+            ("CONFIG_NET_SCH_CAKE", False),
+            ("CONFIG_CIFS", False),
+            ("CONFIG_TMPFS_XATTR", False),
+            ("CONFIG_DEBUG_INFO_BTF", False),
+            ("CONFIG_BPF_EVENTS", False),
+        ]
+        if self.config.use_kpm:
+            symbols.append(("CONFIG_KPM", False))
+        if self._has_fuse_bpf():
+            symbols.append(("CONFIG_FUSE_BPF", True))
+        if self.config.use_bbg:
+            symbols.append(("CONFIG_BBG", False))
+        if self.config.use_zram:
+            symbols.append(("CONFIG_ZRAM", False))
+            symbols.append(("CONFIG_CRYPTO_LZ4KD", False))
+        if self.config.use_mglru:
+            symbols.append(("CONFIG_LRU_GEN", False))
+        if self.config.use_psi:
+            symbols.append(("CONFIG_PSI", False))
+        if self.patch_status.get("ntsync", {}).get("status") == "applied":
+            symbols.append(("CONFIG_NTSYNC", False))
+        if self.patch_status.get("droidspaces", {}).get("status") == "applied":
+            symbols.extend([
+                ("CONFIG_SYSVIPC", False),
+                ("CONFIG_IPC_NS", False),
+                ("CONFIG_POSIX_MQUEUE", False),
+            ])
+        if self.config.bbr_version == "bbr3" and self._bbrv3_applied:
+            # TCP_CONG_BBR3 absent = the backport didn't actually reach
+            # Kconfig, so the kernel has no BBRv3 at all despite the
+            # patch reporting applied - fatal. DEFAULT_BBR3 is a choice
+            # member; if it lost the choice the algorithm is still built
+            # and switchable at runtime, so that's a warning, not a
+            # reason to throw away a working kernel.
+            symbols.append(("CONFIG_TCP_CONG_BBR3", True))
+            symbols.append(("CONFIG_DEFAULT_BBR3", False))
+        elif self.config.bbr_version in ("bbr1", "bbr3"):
+            symbols.append(("CONFIG_DEFAULT_BBR", False))
+        if self.config.enable_ksm:
+            symbols.append(("CONFIG_KSM", False))
+        return symbols
+
+    def _verify_effective_config(self):
+        """Diffs "what we asked for" against "what Kconfig actually
+        accepted", by reading the .config the build produced rather than
+        the gki_defconfig we wrote.
+
+        Fatal symbols raise; non-fatal ones are logged as a warning list
+        so a single unexpectedly-unavailable option on some branch
+        doesn't block an otherwise good build - but never disappears in
+        silence either. Every result also lands in PATCH_STATUS.json
+        under "effective_config" so it shows up in the CI summary.
+        """
+        config_path = self._find_built_config()
+        if config_path is None:
+            logger.warning(
+                "Effective-config verification skipped: could not locate the "
+                "built .config under out/. If the build reported success, "
+                "this is itself worth a look."
+            )
+            self._mark("effective_config", "skipped", "built .config not found")
+            return
+
+        present = set()
+        for line in config_path.read_text(errors="replace").splitlines():
+            line = line.strip()
+            if not line or line.startswith("#"):
+                continue
+            name, sep, value = line.partition("=")
+            if sep and value not in ("n", '""'):
+                present.add(name)
+
+        missing_fatal, missing_soft = [], []
+        for symbol, fatal in self._expected_config_symbols():
+            if symbol not in present:
+                (missing_fatal if fatal else missing_soft).append(symbol)
+
+        logger.info(f"=== Effective config verification ({config_path}) ===")
+        if missing_soft:
+            logger.warning(
+                "These options were written into gki_defconfig but are NOT in "
+                "the built .config - Kconfig dropped them (undefined symbol, "
+                "unmet dependency, or overridden by a choice group). The "
+                "feature is NOT in this kernel:\n  "
+                + "\n  ".join(missing_soft)
+            )
+        if missing_fatal:
+            raise RuntimeError(
+                "Effective config verification failed - these mandatory "
+                "options were requested but are absent from the built "
+                f".config ({config_path}):\n  "
+                + "\n  ".join(missing_fatal)
+                + "\nKconfig silently drops undefined symbols, so the "
+                  "defconfig and the patch status both still look correct. "
+                  "Do not flash this build."
+            )
+        if not missing_soft:
+            logger.info("All expected config symbols present in the built .config - OK")
+        self._mark(
+            "effective_config",
+            "applied" if not missing_soft else "failed",
+            "all expected symbols present" if not missing_soft
+            else f"dropped by Kconfig: {', '.join(missing_soft)}",
         )
 
     def patch_kpm_image(self):
@@ -2523,10 +2947,35 @@ CONFIG_FUSE_BPF=y
 
     def _prepare_android12_boot_images(self, bootimgs_dir: Path, artifacts: list):
         self._chdir(bootimgs_dir)
-        gki_url = f"https://dl.google.com/android/gki/gki-certified-boot-android12-5.10-{self.config.os_patch_level}_{self.config.revision}.zip"
         fallback_url = "https://dl.google.com/android/gki/gki-certified-boot-android12-5.10-2023-01_r1.zip"
-        result = subprocess.run(f"curl -sL -w '%{{http_code}}' {gki_url} -o /dev/null", shell=True, capture_output=True, text=True)
-        url = gki_url if "200" in result.stdout else fallback_url
+        # Only try the matching certified-boot archive when a revision was
+        # actually supplied. Without this guard the f-string interpolated
+        # the literal string "None" (--revision defaults to None, and most
+        # matrix.json android12 entries carry no "revision" field), giving
+        # a URL that can never resolve - so every such build quietly fell
+        # back to the 2023-01_r1 ramdisk while looking like it had checked.
+        if self.config.revision:
+            gki_url = (f"https://dl.google.com/android/gki/gki-certified-boot-android12-5.10-"
+                       f"{self.config.os_patch_level}_{self.config.revision}.zip")
+            result = subprocess.run(f"curl -sL -w '%{{http_code}}' {gki_url} -o /dev/null",
+                                    shell=True, capture_output=True, text=True)
+            if "200" in result.stdout:
+                url = gki_url
+            else:
+                logger.warning(
+                    f"No certified-boot archive for {self.config.os_patch_level}_"
+                    f"{self.config.revision} - falling back to the generic "
+                    f"2023-01_r1 ramdisk."
+                )
+                url = fallback_url
+        else:
+            logger.info(
+                "No --revision given for this android12 build - using the "
+                "generic 2023-01_r1 certified-boot ramdisk. Pass --revision "
+                "(or add a \"revision\" field to this matrix.json entry) to "
+                "use the archive matching this OS patch level."
+            )
+            url = fallback_url
         self._run_cmd(f"curl -Lo gki-kernel.zip {url} && unzip -o gki-kernel.zip && rm gki-kernel.zip", check=False)
         boot_img_path = bootimgs_dir / "boot-5.10.img"
         if boot_img_path.exists():
@@ -2545,14 +2994,38 @@ CONFIG_FUSE_BPF=y
         for kernel_file, output_file in [("Image", "boot.img")]:
             kernel_path = bootimgs_dir / kernel_file
             if not kernel_path.exists():
+                logger.error(
+                    f"{kernel_file} not found in {bootimgs_dir} - the compiled "
+                    f"Image was not copied here, so no boot image can be built."
+                )
                 continue
             cmd = f"$MKBOOTIMG --header_version 4 --kernel {kernel_file} --output {output_file}"
             if has_ramdisk:
                 cmd += f" --ramdisk out/ramdisk --os_version 12.0.0 --os_patch_level {self.config.os_patch_level}"
             self._run_cmd(cmd, check=False)
-            self._run_cmd(f"$AVBTOOL add_hash_footer --partition_name boot --partition_size $((64 * 1024 * 1024)) --image {output_file} --algorithm SHA256_RSA2048 --key $BOOT_SIGN_KEY_PATH", check=False)
+            if not (bootimgs_dir / output_file).exists():
+                raise RuntimeError(
+                    f"mkbootimg did not produce {output_file} in {bootimgs_dir}. "
+                    f"Not reporting a boot image that was never created."
+                )
+            signed = self._run_cmd(
+                f"$AVBTOOL add_hash_footer --partition_name boot "
+                f"--partition_size $((64 * 1024 * 1024)) --image {output_file} "
+                f"--algorithm SHA256_RSA2048 --key $BOOT_SIGN_KEY_PATH",
+                check=False,
+            )
+            if signed.returncode != 0:
+                raise RuntimeError(
+                    f"avbtool failed to sign {output_file} (exit code "
+                    f"{signed.returncode}). Every boot.img this pipeline "
+                    f"publishes is AVB-signed; an unsigned one must not be "
+                    f"handed out as if it were."
+                )
             dest = self.work_dir / f"{self.config.android_version}-{self.config.kernel_version}.{self.config.sub_level}-{self.config.os_patch_level}{self.artifact_suffix}{self.respin_suffix}-{output_file}"
             self._run_cmd(f"cp {output_file} {dest}", check=False)
+            if not dest.exists():
+                raise RuntimeError(f"Failed to copy {output_file} to {dest}")
+            logger.info(f"Boot image ready: {dest}")
             artifacts.append(str(dest))
 
     def create_anykernel_zips(self) -> list:
@@ -2567,14 +3040,30 @@ CONFIG_FUSE_BPF=y
             image_file = f"Image{suffix}"
             image_path = self.work_dir / image_file
             if not image_path.exists():
+                logger.error(f"{image_file} not found in {self.work_dir} - skipping AnyKernel3 zip")
                 continue
             zip_name = f"{self.config.android_version}-{self.config.kernel_version}.{self.config.sub_level}-{self.config.os_patch_level}{self.artifact_suffix}-AnyKernel3{self.respin_suffix}{suffix}.zip"
+            # Written straight into work_dir. This used to be `zip -r
+            # ../{zip_name}` from inside the shared AnyKernel3 checkout,
+            # which resolves to the WORKSPACE root - one level above
+            # work_dir - while the artifact path recorded below (and
+            # build-kernel.sh's closing "Artifacts in:" line) both
+            # pointed at work_dir. CI never noticed because it collects
+            # with a recursive `find`; locally it meant the boot.img and
+            # the flashable zip landed in two different directories.
+            zip_dest = self.work_dir / zip_name
             self._run_cmd(f"cp {image_path} {ak3_dir}/", check=False)
             self._chdir(ak3_dir)
-            self._run_cmd(f"zip -r ../{zip_name} ./*", check=False)
+            self._run_cmd(f"zip -r {zip_dest} ./*", check=False)
             self._run_cmd(f"rm {ak3_dir}/{image_file}", check=False)
-            artifacts.append(str(self.work_dir / zip_name))
             self._chdir(self.work_dir)
+            if not zip_dest.exists():
+                raise RuntimeError(
+                    f"AnyKernel3 zip was not created at {zip_dest} - not "
+                    f"reporting an artifact that does not exist."
+                )
+            logger.info(f"AnyKernel3 zip ready: {zip_dest}")
+            artifacts.append(str(zip_dest))
         return artifacts
 
     def apply_safemode_patch(self):
@@ -2666,6 +3155,15 @@ CONFIG_FUSE_BPF=y
                 return BuildResult(success=False, config=self.config, message="Kernel compilation failed", build_time=time.time() - start_time)
 
             self._verify_expected_objects()
+            self._verify_effective_config()
+
+            # Rewritten now that the build is done: the earlier call
+            # happens before compilation (so a hard patch failure still
+            # produces a status file), which meant peak_mem_gb was always
+            # null in PATCH_STATUS.json even when BUILD_REPORT.txt had
+            # the real figure, and post-build checks like
+            # effective_config were never recorded at all.
+            self._write_patch_status()
 
             self.patch_kpm_image()
             artifacts = []
