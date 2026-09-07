@@ -58,14 +58,30 @@ LOGFILE="$HOME/build-$(date +%Y%m%d-%H%M%S).log"
 # Usage: ./build-kernel.sh --ksu-commit v4.2.0 --no-hide-stuff
 # --susfs-commit <ref>: pin susfs4ksu's KernelSU-integration patch
 # (kernel_patches/KernelSU/10_enable_susfs_for_ksu.patch) to a specific
-# commit instead of tracking its moving `main` branch. That patch is
+# commit instead of tracking its moving branch. That patch is
 # written against a specific SukiSU-Ultra API shape, and susfs4ksu
 # keeps evolving it independently of any given SukiSU-Ultra tag - so
 # leaving it unpinned means a build that worked yesterday can start
 # failing tomorrow (rejected hunks in sucompat.c/supercall.c/etc.) even
 # though --ksu-commit is pinned and unchanged. Pin both together for a
 # fully reproducible combination.
-# Usage: ./build-kernel.sh --ksu-commit v4.2.0 --susfs-commit bca0d23
+#
+# IMPORTANT - the pin is per-GKI-branch, not global. susfs4ksu keeps a
+# separate branch for each GKI version (gki-android12-5.10,
+# gki-android13-5.15, ...), and each branch carries ONLY its own
+# 50_add_susfs_in_gki-<android>-<kernel>.patch. So an android13 hash is
+# meaningless on an android12 build - it checks out a tree with the
+# wrong SUSFS patch in it. The build now refuses that outright instead
+# of failing later with "SUSFS patch file not found".
+#
+# For a single-version build just pass that branch's own ref:
+#   ./build-kernel.sh --ksu-commit v4.2.0 --susfs-commit bca0d2333c1a7d717e7278b019d7af7ba1d16005
+#
+# For option 3 (build everything in matrix.json), use the per-branch
+# form so each branch gets its own correct pin - branches you leave out
+# simply build from their branch HEAD:
+#   ./build-kernel.sh --ksu-commit v4.2.0 \
+#       --susfs-commit 'gki-android12-5.10=ec785f4,gki-android13-5.15=bca0d2333c1a7d717e7278b019d7af7ba1d16005'
 KSU_COMMIT=""
 SUSFS_COMMIT=""
 NO_HIDE_STUFF=""
@@ -299,7 +315,7 @@ for key, entries in data.items():
         [ -n "$SUSFS_COMMIT" ] && EXTRA_ARGS+=(--susfs-commit "$SUSFS_COMMIT")
         [ -n "$NO_HIDE_STUFF" ] && EXTRA_ARGS+=(--no-hide-stuff)
 
-        if python3 build.py \
+        python3 build.py \
             --android "$a" \
             --kernel "$k" \
             --sub-level "$s" \
@@ -308,7 +324,12 @@ for key, entries in data.items():
             --lto-mode "$LTO_MODE" \
             --workspace "$WORKSPACE" \
             "${EXTRA_ARGS[@]}" \
-            2>&1 | tee -a "$LOGFILE"; then
+            2>&1 | tee -a "$LOGFILE"
+        # PIPESTATUS[0], not the pipeline's own status: piping through
+        # tee meant this loop read tee's exit code, which is 0 whether
+        # or not the build failed - so every configuration was counted
+        # as a success and the "Failed" line was always 0.
+        if [ "${PIPESTATUS[0]}" -eq 0 ]; then
             SUCCESS=$((SUCCESS + 1))
         else
             FAILED=$((FAILED + 1))
@@ -388,6 +409,23 @@ python3 build.py \
     "${EXTRA_ARGS[@]}" \
     2>&1 | tee "$LOGFILE"
 
+# PIPESTATUS[0], not $? - the pipeline's own status is tee's, which is
+# essentially always 0, so this script used to exit 0 even when the
+# build failed.
+BUILD_RC="${PIPESTATUS[0]}"
+
+OUT_DIR="$WORKSPACE/${ANDROID_VERSION}-${KERNEL_VERSION}-${SUB_LEVEL}"
 echo ""
 echo "Build log saved to: $LOGFILE"
-echo "Artifacts in: $WORKSPACE/${ANDROID_VERSION}-${KERNEL_VERSION}-${SUB_LEVEL}/"
+echo "Artifacts in: $OUT_DIR"
+if [ -d "$OUT_DIR" ]; then
+    # Both the boot.img and the AnyKernel3 zip land here now (the zip
+    # used to be written one directory up, into $WORKSPACE).
+    find "$OUT_DIR" -maxdepth 1 \( -name '*-boot.img' -o -name '*AnyKernel3*.zip' \) \
+        -printf '  %f\n' 2>/dev/null | sort
+    for f in PATCH_STATUS.json BUILD_REPORT.txt; do
+        [ -f "$OUT_DIR/$f" ] && echo "  $f"
+    done
+    true
+fi
+exit $BUILD_RC
