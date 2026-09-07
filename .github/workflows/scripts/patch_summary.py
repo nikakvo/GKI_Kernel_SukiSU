@@ -19,8 +19,10 @@ STATUS_ICON = {"applied": "OK", "skipped": "-", "failed": "FAIL"}
 # from the table.
 DISPLAY_NAMES = {
     "ptrace_leak_fix": "Ptrace Leak Fix",
+    "unicode_bypass_fix": "Unicode Bypass Fix",
     "ntsync": "NTSync",
     "susfs": "SUSFS",
+    "susfs_kernelsu_integration": "SUSFS<->KSU Integration",
     "sukisu_hide_stuff": "SukiSU Hide Stuff",
     "zram_lz4kd": "ZRAM (LZ4KD)",
     "task_mmu_fixes": "task_mmu.c Fixes",
@@ -28,6 +30,11 @@ DISPLAY_NAMES = {
     "vendor_module_blacklist": "Vendor Module Blacklist",
     "droidspaces": "Droidspaces",
     "bbrv3": "BBRv3",
+    # Not a patch - the post-build check that every option written into
+    # gki_defconfig actually survived into the built .config. Last
+    # column on purpose: it's the one that says whether the rest of the
+    # row translated into anything real.
+    "effective_config": "Effective Config",
 }
 PREFERRED_ORDER = list(DISPLAY_NAMES.keys())
 
