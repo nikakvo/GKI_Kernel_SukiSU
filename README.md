@@ -124,7 +124,7 @@ your data, so nothing is lost.
 - **ipset** — all 18 set types, 65534 set limit
 - **TTL / Hop-Limit** and **connmark** netfilter targets
 - **NTSync** — Wine/Proton synchronisation primitives for Winlator
-- **ZRAM** with LZ4KD and LZ4K-Oplus compression
+- **ZRAM** with LZ4KD compression (LZ4K, LZ4K-Oplus and zstd also available)
 - **Droidspaces** — SysV IPC, POSIX message queues and IPC namespaces
 - **Baseband-guard** — modem partition write protection
 - **MGLRU** and **PSI** memory management
