@@ -5,9 +5,10 @@ A custom GKI kernel for the **Poco F6 Pro / Redmi K70**, built on Google's
 hiding, and a set of networking and performance options that stock GKI
 leaves switched off.
 
-Built and tested on one device by one person. Nothing here is theoretical —
-every feature listed below has been verified on a running Poco F6 Pro, and
-this page tells you the exact command to check each one yourself.
+Built and tested on one device by one person. Every command in the
+**Detailed explanation** section below was run on a real Poco F6 Pro running
+this kernel — the expected output is what the device actually printed, not
+what it should print in theory.
 
 ---
 
@@ -23,8 +24,7 @@ this page tells you the exact command to check each one yourself.
 
 **Your Android version does not matter.** What matters is the GKI base your
 ROM ships, and the Poco F6 Pro uses `android13-5.15` regardless of whether
-the userspace is Android 13, 14, 15 or 16. This has been running on HyperOS
-releases across several Android versions. If you are looking for an
+the userspace is Android 13, 14, 15 or 16. If you are looking for an
 "android13 kernel", this is it — the name refers to the GKI branch, not to
 the Android release you are on.
 
@@ -57,7 +57,7 @@ Read as: GKI branch, kernel sublevel, security patch level, LTO mode, kernel
 respin, and `lts` if built from the LTS-merge tag rather than the date-based
 one.
 
-**Match the sublevel to your ROM.** Check which GKI sublevel you are on:
+**Match the sublevel to your ROM.** To see which GKI sublevel you are on:
 
 ```bash
 su -c 'zcat /proc/config.gz | grep CONFIG_LOCALVERSION'
@@ -67,9 +67,8 @@ A `5.15.211` kernel is intended for a ROM shipping around that sublevel.
 Flashing a wildly different one usually still boots — that is the point of
 GKI — but is not what this was tested against.
 
-Note that `uname -r` is not a reliable check on a kernel that is already
-running this build, because SUSFS spoofs it. On a stock kernel it works
-fine.
+Note that `uname -r` is **not** a reliable check once this kernel is
+running, because SUSFS spoofs it. On a stock kernel it works fine.
 
 ---
 
@@ -92,8 +91,12 @@ fastboot flash boot_ab android13-5.15.211-2026-06-lto-full-r00-lts-boot.img
 fastboot reboot
 ```
 
-To try it without committing — this does not write anything, and a reboot
-puts you back on your old kernel:
+`boot_ab` — not `boot` — writes the image to **both** A and B slots. This
+device is A/B, and flashing only the active slot leaves the other one on the
+stock kernel, which becomes a problem the moment an OTA switches slots.
+
+To try it without committing — this writes nothing, and a reboot puts you
+back on your old kernel:
 
 ```bash
 fastboot boot android13-5.15.211-2026-06-lto-full-r00-lts-boot.img
@@ -113,82 +116,141 @@ your data, so nothing is lost.
 
 - **SukiSU-Ultra** root with KPM (Kernel Patch Module) support
 - **SUSFS v2.3.0** — mount, path, kstat and map hiding; uname and cmdline spoofing
+- **Magic Mount** support
 - **BBRv3** congestion control, default — plus BBR, CUBIC, BIC, HTCP, Westwood
 - **CAKE**, FQ and FQ-CoDel queueing disciplines
 - **nftables** with NAT, connlimit, socket and tproxy support
 - **IPv6 NAT** — `ip6tables` nat table with MASQUERADE
 - **ipset** — all 18 set types, 65534 set limit
+- **TTL / Hop-Limit** and **connmark** netfilter targets
 - **NTSync** — Wine/Proton synchronisation primitives for Winlator
 - **ZRAM** with LZ4KD and LZ4K-Oplus compression
 - **Droidspaces** — SysV IPC, POSIX message queues and IPC namespaces
 - **Baseband-guard** — modem partition write protection
 - **MGLRU** and **PSI** memory management
-- **WireGuard**, **CIFS**, **FUSE-BPF**, **BTF/eBPF**
+- **WireGuard**, **CIFS/SMB**, **FUSE-BPF**, **BTF/eBPF**
 - **ptrace leak fix** and **unicode bypass fix**
+- **Full LTO**
 - KMI-safe: no `__GENKSYMS__` tricks, no reserve-slot guessing
 
 ---
 
 ## Detailed explanation
 
-Everything below is checkable on your own device. Most checks read
-`/proc/config.gz`, which is the configuration the running kernel was
-actually built with — not a claim, the real thing.
+Every check below has been run on the device. Where a command needs a
+userspace tool Android does not ship, that is called out rather than left
+for you to discover.
 
-Start here to see the whole picture:
+To dump the whole configuration first:
 
 ```bash
 su -c 'zcat /proc/config.gz' > /sdcard/kernel-config.txt
 ```
 
-### Root and hiding
+### SukiSU-Ultra and KPM
 
-**SukiSU-Ultra** is a KernelSU fork with KPM support, which lets kernel-side
-patch modules load at runtime. **SUSFS** is a separate project that hides
-root traces from apps — it hides mounts, paths, file stats and memory maps,
-and spoofs `uname` and kernel cmdline.
+SukiSU-Ultra is a KernelSU fork with KPM support, which lets kernel-side
+patch modules load at runtime.
 
 ```bash
-su -c 'zcat /proc/config.gz | grep -E "^CONFIG_KSU"'
+su -c 'zcat /proc/config.gz | grep -E "^CONFIG_(KSU|KPM)"'
 ```
 
-You should see `CONFIG_KSU=y`, `CONFIG_KPM=y`, `CONFIG_KSU_SUSFS=y` and a
-list of `CONFIG_KSU_SUSFS_*` options.
+Expected — note `CONFIG_KPM` needs the `KPM` alternative in the pattern,
+since it does not start with `CONFIG_KSU`:
 
-`CONFIG_KSU_SUSFS_SUS_SU=n` is deliberate — that mode is legacy and the
-kernel-hook approach is used instead.
+```
+CONFIG_KSU=y
+CONFIG_KSU_MANUAL_SU=y
+CONFIG_KPM=y
+CONFIG_KSU_SUSFS=y
+...
+```
 
-> **Note on `uname`:** `CONFIG_KSU_SUSFS_SPOOF_UNAME=y` means `uname -r`
-> reports a spoofed string, not the real kernel version. This is the
-> feature working as intended. To see the real build, use the config check
-> above or look in the SukiSU-Ultra app.
+The SukiSU-Ultra app also shows KPM status on its home screen, which is the
+more reliable check — `grep`ping `/proc/kallsyms` for KPM symbols does not
+work here, because `CONFIG_KSU_SUSFS_HIDE_KSU_SUSFS_SYMBOLS=y` hides them
+on purpose.
+
+### SUSFS
+
+SUSFS hides root traces from apps — mounts, paths, file stats and memory
+maps — and spoofs `uname` and kernel cmdline.
+
+```bash
+su -c 'zcat /proc/config.gz | grep "^CONFIG_KSU_SUSFS"'
+```
+
+Nine options, which is the complete set susfs4ksu v2.3.0 defines:
+
+```
+CONFIG_KSU_SUSFS=y
+CONFIG_KSU_SUSFS_SUS_PATH=y
+CONFIG_KSU_SUSFS_SUS_MOUNT=y
+CONFIG_KSU_SUSFS_SUS_KSTAT=y
+CONFIG_KSU_SUSFS_SPOOF_UNAME=y
+CONFIG_KSU_SUSFS_ENABLE_LOG=y
+CONFIG_KSU_SUSFS_HIDE_KSU_SUSFS_SYMBOLS=y
+CONFIG_KSU_SUSFS_SPOOF_CMDLINE_OR_BOOTCONFIG=y
+CONFIG_KSU_SUSFS_OPEN_REDIRECT=y
+```
+
+If you have seen older kernels advertise `AUTO_ADD_SUS_BIND_MOUNT`,
+`AUTO_ADD_SUS_KSU_DEFAULT_MOUNT`, `TRY_UMOUNT` or
+`AUTO_ADD_TRY_UMOUNT_FOR_BIND_MOUNT` — upstream deprecated all four and the
+behaviour is now unconditional. They are not missing from this build; the
+symbols no longer exist. A build that still lists them in its defconfig is
+writing options Kconfig discards without a word.
+
+> **`uname` is spoofed.** `uname -r` reports a fake string by design. Use
+> the config dump above, or the SukiSU-Ultra app, to see the real build.
 
 ### BBRv3 congestion control
 
 BBRv3 is Google's third-generation TCP congestion control. Compared to
 CUBIC it generally holds higher throughput on lossy mobile links, and
-compared to BBRv1 it is less aggressive toward competing flows.
+compared to BBRv1 it is fairer to competing flows.
 
 ```bash
 su -c 'cat /proc/sys/net/ipv4/tcp_available_congestion_control'
 su -c 'cat /proc/sys/net/ipv4/tcp_congestion_control'
 ```
 
-The first lists everything built in; the second shows the active one, which
-should be `bbr3`. To switch temporarily:
+```
+reno bbr bbr3 bic cubic westwood htcp
+bbr3
+```
+
+The first line lists everything built in; the second is the active one. To
+switch at runtime and switch back:
 
 ```bash
 su -c 'sysctl -w net.ipv4.tcp_congestion_control=cubic'
+su -c 'sysctl -w net.ipv4.tcp_congestion_control=bbr3'
 ```
 
-### Queueing disciplines — CAKE
+Both changes are temporary and reset on reboot. Westwood is worth trying on
+lossy links; BBRv3 is the default because it suits most of them.
 
-CAKE combines fair queueing with active queue management and shaping in one
-qdisc. Useful for reducing bufferbloat on a tethered connection.
+### CAKE and queueing disciplines
+
+CAKE combines fair queueing, active queue management and shaping in one
+qdisc, which reduces bufferbloat under load.
+
+**CAKE is available, not active.** Android attaches `pfifo_fast` and `mq` to
+its interfaces, so a plain `tc qdisc show` prints a long list with no `cake`
+in it — that is normal and does not mean anything is wrong. To prove the
+qdisc works, apply it to the loopback interface and remove it again:
 
 ```bash
-su -c 'zcat /proc/config.gz | grep -E "NET_SCH_CAKE|NET_SCH_FQ"'
-su -c 'tc qdisc show'
+su -c 'tc qdisc add dev lo root cake && tc qdisc show dev lo && tc qdisc del dev lo root'
+```
+
+Seeing a `qdisc cake ...` line means it works. FQ and FQ-CoDel are built in
+the same way:
+
+```bash
+su -c 'zcat /proc/config.gz | grep -E "NET_SCH_(CAKE|FQ)"'
 ```
 
 ### nftables
@@ -202,17 +264,32 @@ The practical reason to want it: current Debian and Kali ship
 chroot are translated to nftables and fail outright on a kernel without it.
 
 ```bash
-su -c 'zcat /proc/config.gz | grep -E "^CONFIG_NF_TABLES|^CONFIG_NFT_"'
+su -c 'zcat /proc/config.gz | grep -E "^CONFIG_(NF_TABLES|NFT_)"'
 ```
 
-Android does not ship an `nft` binary, so `nft` will report "not found" from
-a normal shell. That is a missing userspace tool, not a missing kernel
-feature. Inside a Debian or Kali chroot:
+Twenty-three symbols, ending with the IPv4/IPv6 families:
+
+```
+CONFIG_NF_TABLES=y
+CONFIG_NF_TABLES_INET=y
+CONFIG_NFT_COMPAT=y
+CONFIG_NFT_NAT=y
+CONFIG_NFT_MASQ=y
+CONFIG_NFT_SOCKET=y
+CONFIG_NFT_TPROXY=y
+...
+CONFIG_NF_TABLES_IPV4=y
+CONFIG_NF_TABLES_IPV6=y
+```
+
+**Android ships no `nft` binary**, so `nft` reports "inaccessible or not
+found" from a normal shell. That is a missing userspace tool, not a missing
+kernel feature. Inside a Debian or Kali chroot:
 
 ```bash
 apt install nftables
-nft list ruleset          # empty output with exit 0 = working
-iptables -L               # this is iptables-nft; it would fail without NF_TABLES
+nft list ruleset          # empty output, exit 0 = working
+iptables -L               # this is iptables-nft; it fails without NF_TABLES
 ```
 
 `# Warning: iptables-legacy tables present` is expected and good — it means
@@ -228,8 +305,7 @@ alongside. To read Android's actual rules, use `iptables-legacy -L -n -v`.
 > ```
 
 `CONFIG_NF_TABLES_ARP` and `CONFIG_NF_TABLES_BRIDGE` are intentionally off —
-neither the arp nor the bridge family is useful on a phone with no bridge
-interfaces.
+neither family is useful on a phone with no bridge interfaces.
 
 ### IPv6 NAT
 
@@ -241,26 +317,58 @@ tethering setups.
 su -c 'ip6tables -t nat -L'
 ```
 
-Listing the four chains means it works. On a kernel without it, this errors
-out.
+Listing PREROUTING, INPUT, OUTPUT and POSTROUTING means it works. On a
+kernel without it, this errors out instead.
 
 ### ipset
 
 All 18 set types are built, including the MAC-keyed ones stock GKI omits,
-with the set limit raised from 256 to 65534.
+with the set limit raised from the default 256 to 65534.
 
 ```bash
-su -c 'zcat /proc/config.gz | grep -E "^CONFIG_IP_SET"'
+su -c 'zcat /proc/config.gz | grep "^CONFIG_IP_SET"'
 ```
+
+**ipset needs a userspace binary Android does not ship.** Get a static arm64
+build from [ipset-arm64](https://github.com/nikakvo/ipset-arm64), then:
+
+```bash
+su -c 'ipset create test hash:ip && ipset destroy test'
+```
+
+Running without a "Kernel module not found" error means the kernel side is
+working.
+
+### TTL / Hop-Limit and connmark
+
+The TTL target lets firewall rules rewrite a packet's TTL (IPv4) or Hop
+Limit (IPv6). Carriers often detect tethering by noticing the TTL decrement
+that happens when traffic is routed through another device. connmark tags
+whole connections rather than individual packets, so later packets in the
+same connection can be matched consistently.
+
+```bash
+su -c 'iptables -t mangle -A POSTROUTING -j TTL --ttl-set 65 && iptables -t mangle -D POSTROUTING -j TTL --ttl-set 65'
+su -c 'iptables -t mangle -A POSTROUTING -j CONNMARK --set-mark 1 && iptables -t mangle -D POSTROUTING -j CONNMARK --set-mark 1'
+```
+
+Each pair adds a rule and immediately deletes it. No "No chain/target/match
+by that name" error means the target is present.
 
 ### NTSync
 
 NTSync exposes Windows-style synchronisation primitives to userspace, which
-Wine and Proton use instead of emulating them. Relevant if you run Winlator.
+Wine and Proton use instead of emulating them over futex. Relevant if you
+run Winlator.
 
 ```bash
 ls -l /dev/ntsync
 su -c 'zcat /proc/config.gz | grep NTSYNC'
+```
+
+```
+crw-rw-rw-. 1 root root 10, 127 /dev/ntsync
+CONFIG_NTSYNC=y
 ```
 
 ### ZRAM with LZ4KD
@@ -273,66 +381,153 @@ su -c 'cat /sys/block/zram0/comp_algorithm'
 su -c 'cat /sys/block/zram0/mm_stat'
 ```
 
-The active algorithm appears in brackets. Switching requires resetting the
-ZRAM device, so it is not something to change on a live system casually.
+```
+lzo lzo-rle lz4 lz4hc lz4k lz4k_oplus [lz4kd] deflate 842 zstd
+853405696 265356378 332423168        0 400699392     7225        0    10340    13460
+```
+
+The active algorithm is the one in brackets. In `mm_stat`, the first three
+columns are the ones worth reading: **original** data size, **compressed**
+size, and **total memory used** including allocator overhead. In the example
+above roughly 814 MB of pages are being held in about 253 MB — a little
+over 3:1.
+
+Switching the algorithm requires resetting the ZRAM device, so it is not
+something to change casually on a live system.
 
 ### Droidspaces
 
-Enables SysV IPC, POSIX message queues and IPC namespaces — needed by
-container and virtualisation tooling that expects a normal Linux IPC surface.
+Enables SysV IPC, POSIX message queues and IPC namespaces — the foundation
+for running a real Linux container with its own init system, rather than a
+plain chroot that shares the host's process tree. Use it through the
+[Droidspaces app](https://github.com/ravindu644/Droidspaces-OSS), which does
+the actual container setup.
 
 Android's GKI leaves these off, and turning them on is not trivial: the
-structures involved are kABI-tracked, so the fields have to be placed in
+structures involved are kABI-tracked, so the new fields have to occupy
 `ANDROID_KABI_RESERVE` slots. Which slots are free differs per respin, so
 the build tries three variants and uses whichever fits the exact source
 tree. This one used the 6/7/8 slot variant.
 
 ```bash
-su -c 'ipcs -a'
 su -c 'zcat /proc/config.gz | grep -E "SYSVIPC|POSIX_MQUEUE|IPC_NS"'
+```
+
+```
+CONFIG_SYSVIPC=y
+CONFIG_SYSVIPC_SYSCTL=y
+CONFIG_POSIX_MQUEUE=y
+CONFIG_POSIX_MQUEUE_SYSCTL=y
+CONFIG_IPC_NS=y
+CONFIG_SYSVIPC_COMPAT=y
+```
+
+**Android ships no `ipcs` binary**, so that command reports "inaccessible or
+not found". Read procfs directly instead — these files only exist when
+SysV IPC is compiled in:
+
+```bash
+su -c 'cat /proc/sysvipc/shm'
+su -c 'cat /proc/sysvipc/sem'
+```
+
+For a functional namespace check:
+
+```bash
+su -c 'unshare -pf echo namespace-test-ok'
 ```
 
 ### Baseband-guard
 
-An LSM that blocks writes to modem and bootloader-related partitions, so a
-misbehaving root app cannot brick the radio.
+An LSM that hooks the kernel write path and blocks unauthorized writes to
+the baseband/modem partitions, denying by default and logging every blocked
+attempt.
 
 ```bash
 su -c 'zcat /proc/config.gz | grep CONFIG_BBG'
-su -c 'cat /sys/kernel/security/lsm'
+su -c 'dmesg | grep -c baseband_guard'
 ```
 
-`baseband_guard` should appear in the LSM list.
+```
+CONFIG_BBG=y
+# CONFIG_BBG_BLOCK_BOOT is not set
+# CONFIG_BBG_BLOCK_RECOVERY is not set
+```
 
-### Memory management — MGLRU and PSI
+A non-zero dmesg count means it is live — BBG logs a line each time it
+evaluates a process's SELinux domain.
 
-MGLRU is a rewritten page reclaim algorithm that generally improves
-responsiveness under memory pressure. PSI exposes stall metrics that
-userspace daemons use to make eviction decisions.
+`CONFIG_BBG_BLOCK_BOOT` and `CONFIG_BBG_BLOCK_RECOVERY` are **deliberately
+off**. Enabling them has caused real conflicts with kernel-zip flashing and
+recovery tools on other BBG kernels. Only the core baseband protection is
+on.
+
+Do not use `/sys/kernel/security/lsm` for this — securityfs is not mounted
+there on Android and the command just returns "No such file or directory".
+
+### MGLRU and PSI
+
+MGLRU replaces the traditional active/inactive LRU lists with multiple
+generations based on access recency, which makes reclaim decisions more
+accurate and keeps more background apps alive under pressure. PSI exposes
+real stall metrics that LMKD uses to decide what to kill.
 
 ```bash
 su -c 'cat /sys/kernel/mm/lru_gen/enabled'
 su -c 'cat /proc/pressure/memory'
 ```
 
-### WireGuard, CIFS, FUSE-BPF
+```
+0x0003
+some avg10=0.00 avg60=0.00 avg300=0.00 total=1987090
+full avg10=0.00 avg60=0.00 avg300=0.00 total=1085668
+```
+
+`0x0003` is a bitmask, not a count — any non-zero value means MGLRU is
+active. `0x0000` would mean it is compiled in but switched off.
+
+### WireGuard, CIFS/SMB, FUSE-BPF
 
 WireGuard in-kernel means VPN apps use the kernel implementation instead of
 the slower userspace one. CIFS lets you mount SMB shares directly. FUSE-BPF
-speeds up FUSE filesystem operations, which Android uses heavily for
-`/storage`.
+speeds up FUSE operations, which Android uses heavily for `/storage`.
 
 ```bash
 su -c 'zcat /proc/config.gz | grep -E "WIREGUARD|^CONFIG_CIFS|FUSE_BPF"'
+su -c 'cat /proc/filesystems | grep cifs'
 ```
+
+If you have a WireGuard tunnel up, it appears as an interface:
+
+```bash
+su -c 'ip link show type wireguard'
+```
+
+### Full LTO
+
+LLVM full link-time optimization performs whole-program optimization across
+all translation units, which allows more aggressive cross-module inlining
+than the thin variant.
+
+```bash
+su -c 'zcat /proc/config.gz | grep CONFIG_LTO_CLANG_FULL'
+```
+
+### ptrace leak fix
+
+Backports an upstream 5.16 hardening fix for a race where `ptrace_message`
+was briefly readable by others before the tracer was notified, or left stale
+after detach. There is no `/proc` or `/sys` flag for this — it is an
+internal timing fix, not a toggle. On 6.1+ branches it is already upstream
+and nothing is patched.
 
 ### KMI safety
 
-Google's GKI enforces a stable kernel module interface so vendor modules keep
-loading. Some kernels work around this by hiding new struct fields from the
-checksum tool with `#ifndef __GENKSYMS__` — which makes the checksum match
-while the actual struct layout still shifts underneath vendor modules that
-were compiled against the old one.
+Google's GKI enforces a stable kernel module interface so vendor modules
+keep loading. Some kernels work around this by hiding new struct fields from
+the checksum tool with `#ifndef __GENKSYMS__` — which makes the checksum
+match while the actual struct layout still shifts underneath vendor modules
+compiled against the old one.
 
 That approach was tried here and produced a confirmed bootloop on a real
 device. It is not used. Fields go in real reserve slots or the feature does
@@ -343,7 +538,7 @@ not ship.
 ## Check everything at once
 
 ```bash
-su -c 'zcat /proc/config.gz' | grep -E "^CONFIG_(KSU|KPM|NF_TABLES|NFT_|IP6_NF_NAT|IP_SET|NTSYNC|ZRAM|CRYPTO_LZ4K|SYSVIPC|IPC_NS|POSIX_MQUEUE|BBG|LRU_GEN|PSI|WIREGUARD|CIFS|FUSE_BPF|TCP_CONG|NET_SCH)"
+su -c 'zcat /proc/config.gz' | grep -E "^CONFIG_(KSU|KPM|NF_TABLES|NFT_|IP6_NF_NAT|IP_SET|NTSYNC|ZRAM|CRYPTO_LZ4K|SYSVIPC|IPC_NS|POSIX_MQUEUE|BBG|LRU_GEN|PSI|WIREGUARD|CIFS|FUSE_BPF|TCP_CONG|NET_SCH|LTO_CLANG)"
 ```
 
 ---
@@ -378,9 +573,9 @@ cd .github/workflows/scripts
 python3 check_susfs.py --pin 'gki-android13-5.15=<your-ref>'
 ```
 
-That reports what landed upstream since your pin and, more usefully,
-separates commits touching files this build depends on from the ones that do
-not. Only two files can actually break a build:
+That reports what landed upstream since your pin and separates commits
+touching files this build depends on from the ones that do not. Only two
+files can actually break a build:
 `kernel_patches/KernelSU/10_enable_susfs_for_ksu.patch` and the per-branch
 `50_add_susfs_in_gki-*.patch`.
 
@@ -395,7 +590,9 @@ silently lacks a feature is worse than one that fails:
 - **Effective config verification** — reads the `.config` the build
   *produced* and compares it against everything requested. Kconfig drops
   undefined symbols and unmet dependencies in complete silence, so reading
-  the defconfig back proves nothing.
+  the defconfig back proves nothing. This is what caught four deprecated
+  SUSFS options still being written into the defconfig long after upstream
+  removed them.
 
 Results land in `PATCH_STATUS.json` and `BUILD_REPORT.txt` next to the
 artifacts.
@@ -407,6 +604,8 @@ artifacts.
 - [SukiSU-Ultra](https://github.com/SukiSU-Ultra/SukiSU-Ultra) — root implementation
 - [susfs4ksu](https://github.com/ShirkNeko/susfs4ksu) (ShirkNeko) — SUSFS
 - [WildKernels](https://github.com/WildKernels) — BBRv3 backport, Droidspaces kABI patches, NTSync compat patches
+- [Baseband-guard](https://github.com/vc-teahouse/Baseband-guard) (vc-teahouse) — modem write protection LSM
+- [Droidspaces](https://github.com/ravindu644/Droidspaces-OSS) (ravindu644) — container userspace
 - [AnyKernel3](https://github.com/osm0sis/AnyKernel3) (osm0sis) — flashable zip framework
 - Google — the GKI kernel itself
 
