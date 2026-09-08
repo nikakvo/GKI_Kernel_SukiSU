@@ -63,12 +63,15 @@ one.
 su -c 'zcat /proc/config.gz | grep CONFIG_LOCALVERSION'
 ```
 
+Or simply:
+
+```bash
+uname -r
+```
+
 A `5.15.211` kernel is intended for a ROM shipping around that sublevel.
 Flashing a wildly different one usually still boots — that is the point of
 GKI — but is not what this was tested against.
-
-Note that `uname -r` is **not** a reliable check once this kernel is
-running, because SUSFS spoofs it. On a stock kernel it works fine.
 
 ---
 
@@ -115,17 +118,17 @@ your data, so nothing is lost.
 ## Features
 
 - **SukiSU-Ultra** root with KPM (Kernel Patch Module) support
-- **SUSFS v2.3.0** — mount, path, kstat and map hiding; uname and cmdline spoofing
+- **SUSFS v2.3.0** — mount, path, kstat and map hiding; optional uname and cmdline spoofing
 - **Magic Mount** support
 - **BBRv3** congestion control, default — plus BBR, CUBIC, BIC, HTCP, Westwood
 - **CAKE**, FQ and FQ-CoDel queueing disciplines
 - **nftables** with NAT, connlimit, socket and tproxy support
 - **IPv6 NAT** — `ip6tables` nat table with MASQUERADE
-- **ipset** — all 18 set types, 65534 set limit
+- **ipset** — all 18 set types, 65534 set limit — needs [ipset-arm64](https://github.com/nikakvo/ipset-arm64) for the userspace binary
 - **TTL / Hop-Limit** and **connmark** netfilter targets
 - **NTSync** — Wine/Proton synchronisation primitives for Winlator
 - **ZRAM** with LZ4KD compression (LZ4K, LZ4K-Oplus and zstd also available)
-- **Droidspaces** — SysV IPC, POSIX message queues and IPC namespaces
+- **[Droidspaces](https://github.com/ravindu644/Droidspaces-OSS)** — SysV IPC, POSIX message queues and IPC namespaces
 - **Baseband-guard** — modem partition write protection
 - **MGLRU** and **PSI** memory management
 - **WireGuard**, **CIFS/SMB** with POSIX extensions, **FUSE-BPF**, **BTF/eBPF**
@@ -167,15 +170,16 @@ CONFIG_KSU_SUSFS=y
 ...
 ```
 
-The SukiSU-Ultra app also shows KPM status on its home screen, which is the
-more reliable check — `grep`ping `/proc/kallsyms` for KPM symbols does not
-work here, because `CONFIG_KSU_SUSFS_HIDE_KSU_SUSFS_SYMBOLS=y` hides them
-on purpose.
+The SukiSU-Ultra app is the quickest check — its home screen shows
+**Working**, the version, and **Built-in**, along with the kernel version,
+the SUSFS version and the SELinux state. Grepping `/proc/kallsyms` for KPM
+symbols is less dependable here, since `CONFIG_KSU_SUSFS_HIDE_KSU_SUSFS_SYMBOLS=y`
+hides KernelSU and SUSFS symbols from that interface on purpose.
 
 ### SUSFS
 
 SUSFS hides root traces from apps — mounts, paths, file stats and memory
-maps — and spoofs `uname` and kernel cmdline.
+maps — and can spoof `uname` and kernel cmdline if you switch that on.
 
 ```bash
 su -c 'zcat /proc/config.gz | grep "^CONFIG_KSU_SUSFS"'
@@ -202,8 +206,20 @@ behaviour is now unconditional. They are not missing from this build; the
 symbols no longer exist. A build that still lists them in its defconfig is
 writing options Kconfig discards without a word.
 
-> **`uname` is spoofed.** `uname -r` reports a fake string by design. Use
-> the config dump above, or the SukiSU-Ultra app, to see the real build.
+> **`SPOOF_UNAME` is a capability, not a default.** The kernel option only
+> makes spoofing *possible*. Out of the box nothing is spoofed — the SUSFS
+> module shows `SPOOFED KERNEL VERSION: default` and `uname -a` reports the
+> real thing:
+>
+> ```
+> 5.15.211-android13-r00-lts #1 SMP PREEMPT Tue Sep 08 01:32:14 UTC 2026
+> ```
+>
+> To actually spoof it, set a value in the SUSFS module's **Kernel uname**
+> section and enable **Spoof on boot**. There is a **Set Stock Kernel Build
+> Date** button there too, which is usually what you want if an app is
+> checking the build timestamp. Until you turn it on, `uname -r` is an
+> honest answer.
 
 ### BBRv3 congestion control
 
