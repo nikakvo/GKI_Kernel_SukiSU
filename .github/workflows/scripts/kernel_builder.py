@@ -64,7 +64,6 @@ class KernelBuilder:
 # === KernelSU Config ===
 CONFIG_KSU=y
 CONFIG_KPM=y
-CONFIG_KSU_SUSFS_SUS_SU=n
 
 # === TMPFS Config ===
 CONFIG_TMPFS_XATTR=y
@@ -106,14 +105,31 @@ CONFIG_NET_SCH_CAKE=y
 CONFIG_NET_SCH_FQ_CODEL=y
 
 # === SUSFS Config ===
+# These are ALL nine Kconfig symbols susfs4ksu v2.3.0 actually defines.
+# Verified against kernel_patches/KernelSU/10_enable_susfs_for_ksu.patch
+# on the gki-android13-5.15 branch, not copied from an older config.
+#
+# Four options that used to live here were removed after a device
+# check showed them absent from /proc/config.gz on a built kernel:
+#   CONFIG_KSU_SUSFS_AUTO_ADD_SUS_KSU_DEFAULT_MOUNT
+#   CONFIG_KSU_SUSFS_AUTO_ADD_SUS_BIND_MOUNT
+#   CONFIG_KSU_SUSFS_TRY_UMOUNT
+#   CONFIG_KSU_SUSFS_AUTO_ADD_TRY_UMOUNT_FOR_BIND_MOUNT
+# Upstream deprecated them ("Deprecated add_try_umount cli,
+# AUTO_ADD_SUS_KSU_DEFAULT_MOUNT and AUTO_ADD_SUS_BIND_MOUNT") and the
+# behaviour is now unconditional, so the symbols no longer exist and
+# Kconfig was dropping every one of them in silence. Do not re-add them
+# without checking the current 10_enable_susfs_for_ksu.patch first.
+#
+# CONFIG_KSU_SUSFS_SUS_SU=n was removed for the same reason - that
+# symbol is gone too, so the line was a no-op rather than a setting.
+# (CONFIG_KSU_SUSFS_SUS_PATH is written separately in
+# configure_kernel() because 6.6 needs it off - not repeated here, or
+# the defconfig would carry the same symbol twice.)
 CONFIG_KSU_SUSFS=y
 CONFIG_KSU_SUSFS_SUS_MAP=y
 CONFIG_KSU_SUSFS_SUS_MOUNT=y
-CONFIG_KSU_SUSFS_AUTO_ADD_SUS_KSU_DEFAULT_MOUNT=y
-CONFIG_KSU_SUSFS_AUTO_ADD_SUS_BIND_MOUNT=y
 CONFIG_KSU_SUSFS_SUS_KSTAT=y
-CONFIG_KSU_SUSFS_TRY_UMOUNT=y
-CONFIG_KSU_SUSFS_AUTO_ADD_TRY_UMOUNT_FOR_BIND_MOUNT=y
 CONFIG_KSU_SUSFS_SPOOF_UNAME=y
 CONFIG_KSU_SUSFS_ENABLE_LOG=y
 CONFIG_KSU_SUSFS_HIDE_KSU_SUSFS_SYMBOLS=y
@@ -163,6 +179,89 @@ CONFIG_CIFS=y
 # with a matching conditional check in _verify_expected_objects().
 CONFIG_DEBUG_INFO_BTF=y
 CONFIG_BPF_EVENTS=y
+"""
+
+    # Optional networking additions, enabled together by --extra-net.
+    #
+    # Everything here was checked against v5.15's own Kconfig files
+    # rather than copied from another project, because a symbol that
+    # does not exist (or whose dependencies are unmet) is dropped by
+    # Kconfig in complete silence - it lands in gki_defconfig, never
+    # reaches .config, and the feature simply is not in the kernel.
+    # _expected_config_symbols() re-checks every line below against the
+    # produced .config so that failure mode cannot go unnoticed.
+    #
+    # Two things deliberately left out despite other GKI projects
+    # shipping them:
+    #   CONFIG_CIFS_POSIX - depends on CIFS_ALLOW_INSECURE_LEGACY, i.e.
+    #     it cannot be enabled without turning SMB1 back on. Not worth
+    #     it; CIFS_XATTR alone gives the useful half.
+    #   CONFIG_NFT_FIB* - NFT_FIB_INET has hard `depends on` (not
+    #     select) chains through NFT_FIB_IPV4/IPV6, and reverse-path
+    #     matching is not why anyone wants nftables here.
+    EXTRA_NET_CONFIG_TEMPLATE = """
+# === ipset: the four set types stock GKI leaves out ===
+# The MAC-keyed types are the ones worth having - filtering by hardware
+# address is not expressible with the ip/net types already enabled.
+# IP_SET_MAX defaults to 256; nothing here needs 65534, but the counter
+# is just an array bound and raising it costs nothing.
+CONFIG_IP_SET_MAX=65534
+CONFIG_IP_SET_HASH_IPMAC=y
+CONFIG_IP_SET_HASH_MAC=y
+CONFIG_IP_SET_HASH_NETNET=y
+CONFIG_IP_SET_HASH_NETPORTNET=y
+
+# === IPv6 NAT ===
+# Dependencies are already satisfied on a stock GKI build: NF_NAT and
+# NETFILTER_ADVANCED come in via IPv4 NAT (iptable_nat), IP6_NF_IPTABLES
+# via ip6_tables, and nf_nat_masquerade is already compiled in for the
+# IPv4 side. So this adds the ip6tables `nat` table and its MASQUERADE
+# target and little else. Google leaves it off because Android does
+# NAT64/464XLAT through clatd and never needs NAT66.
+CONFIG_IP6_NF_NAT=y
+CONFIG_IP6_NF_TARGET_MASQUERADE=y
+
+# === nftables ===
+# Coexists with iptables rather than replacing it - both register
+# against the same netfilter hooks, and Android's netd keeps using the
+# xtables path untouched. The reason to want it is userspace: current
+# Debian/Kali ship /usr/sbin/iptables as xtables-nft-multi, so iptables
+# commands inside a chroot are translated to nftables and fail outright
+# without NF_TABLES in the kernel.
+# NF_TABLES_INET selects NF_TABLES_IPV4 and NF_TABLES_IPV6, but they are
+# listed explicitly so the dependency NFT_NAT needs is visible here
+# rather than implied.
+CONFIG_NF_TABLES=y
+CONFIG_NF_TABLES_INET=y
+CONFIG_NF_TABLES_IPV4=y
+CONFIG_NF_TABLES_IPV6=y
+CONFIG_NF_TABLES_NETDEV=y
+# NFT_COMPAT is what lets nft reuse existing x_tables matches/targets -
+# without it, translated iptables rules that reference xt extensions
+# still fail.
+CONFIG_NFT_COMPAT=y
+CONFIG_NFT_CT=y
+CONFIG_NFT_COUNTER=y
+CONFIG_NFT_LIMIT=y
+CONFIG_NFT_LOG=y
+CONFIG_NFT_MASQ=y
+CONFIG_NFT_NAT=y
+CONFIG_NFT_REDIR=y
+CONFIG_NFT_REJECT=y
+CONFIG_NFT_REJECT_INET=y
+CONFIG_NFT_HASH=y
+CONFIG_NFT_NUMGEN=y
+CONFIG_NFT_QUOTA=y
+CONFIG_NFT_CONNLIMIT=y
+CONFIG_NFT_SOCKET=y
+CONFIG_NFT_TPROXY=y
+
+# === odds and ends ===
+# NET_ACT_CONNMARK needs NET_CLS_ACT (already on - act_api/cls_api are
+# compiled in stock GKI) and NF_CONNTRACK_MARK (already set above).
+CONFIG_NET_ACT_CONNMARK=y
+CONFIG_INET_RAW_DIAG=y
+CONFIG_CIFS_XATTR=y
 """
 
     # Branches that actually have FUSE-BPF (fs/fuse/backing.c). Google
@@ -2117,6 +2216,10 @@ CONFIG_BPF_EVENTS=y
                     f"{self.config.android_version}-{self.config.kernel_version} "
                     f"(fs/fuse/backing.c does not exist on this branch)"
                 )
+            if self.config.use_extra_net:
+                logger.info("Adding extra networking configs (--extra-net): "
+                            "IPv6 NAT, nftables, extra ipset types")
+                f.write(self.EXTRA_NET_CONFIG_TEMPLATE)
 
         if self.config.use_zram:
             self._configure_zram()
@@ -2795,8 +2898,22 @@ CONFIG_BPF_EVENTS=y
         symbols = [
             ("CONFIG_KSU", True),
             ("CONFIG_KSU_SUSFS", True),
+            # All nine SUSFS symbols, not a sample. A device check found
+            # four options being written into gki_defconfig that upstream
+            # had already deprecated - they were absent from the built
+            # kernel and nothing noticed, because the two SUSFS symbols
+            # spot-checked here happened to be survivors. Listing the
+            # full set means the next upstream removal shows up on the
+            # first build after it happens.
+            ("CONFIG_KSU_SUSFS_SUS_PATH", False),
+            ("CONFIG_KSU_SUSFS_SUS_MAP", False),
             ("CONFIG_KSU_SUSFS_SUS_MOUNT", False),
+            ("CONFIG_KSU_SUSFS_SUS_KSTAT", False),
             ("CONFIG_KSU_SUSFS_SPOOF_UNAME", False),
+            ("CONFIG_KSU_SUSFS_ENABLE_LOG", False),
+            ("CONFIG_KSU_SUSFS_HIDE_KSU_SUSFS_SYMBOLS", False),
+            ("CONFIG_KSU_SUSFS_SPOOF_CMDLINE_OR_BOOTCONFIG", False),
+            ("CONFIG_KSU_SUSFS_OPEN_REDIRECT", False),
             ("CONFIG_WIREGUARD", False),
             ("CONFIG_IP_SET", False),
             ("CONFIG_NET_SCH_CAKE", False),
@@ -2839,6 +2956,16 @@ CONFIG_BPF_EVENTS=y
             symbols.append(("CONFIG_DEFAULT_BBR", False))
         if self.config.enable_ksm:
             symbols.append(("CONFIG_KSM", False))
+        if self.config.use_extra_net:
+            # Derived from the template itself rather than retyped, so
+            # the two lists cannot drift apart. All non-fatal: a dropped
+            # networking option means that feature is missing, which is
+            # worth a loud warning, but throwing away an otherwise good
+            # kernel over it would be out of proportion.
+            for line in self.EXTRA_NET_CONFIG_TEMPLATE.splitlines():
+                line = line.strip()
+                if line.startswith("CONFIG_") and "=" in line:
+                    symbols.append((line.split("=", 1)[0], False))
         return symbols
 
     def _verify_effective_config(self):
