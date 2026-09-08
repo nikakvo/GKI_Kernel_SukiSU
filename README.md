@@ -88,7 +88,7 @@ Your bootloader must already be unlocked.
 
 ```bash
 adb reboot bootloader
-fastboot flash boot android13-5.15.211-2026-06-lto-full-r00-lts-boot.img
+fastboot flash boot_ab android13-5.15.211-2026-06-lto-full-r00-lts-boot.img
 fastboot reboot
 ```
 
