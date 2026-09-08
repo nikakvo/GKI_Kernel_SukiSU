@@ -1,0 +1,81 @@
+name: Check SUSFS Updates
+
+# Reports what has landed in susfs4ksu since a given --susfs-commit pin,
+# and whether any of it touches the two files that can actually break a
+# build here (kernel_patches/KernelSU/10_enable_susfs_for_ksu.patch and
+# the per-branch 50_add_susfs_in_gki-*.patch).
+#
+# This workflow only reads and reports - it never changes a pin, never
+# commits anything, and never triggers a build. Moving a pin stays a
+# deliberate manual decision, taken after a test build, exactly as
+# before. The point is to know whether that test build is worth running
+# this week.
+#
+# Results land in the run's job summary (Actions -> the run -> Summary).
+
+on:
+  schedule:
+    # Mondays 06:00 UTC - a weekly heads-up rather than daily noise.
+    - cron: '0 6 * * 1'
+  workflow_dispatch:
+    inputs:
+      susfs_pin:
+        description: 'Pin(s) to compare against. Bare ref, or per-branch: gki-android12-5.10=ec785f4,gki-android13-5.15=bca0d23. Leave empty to just report recent activity.'
+        required: false
+        type: string
+        default: ''
+      branches:
+        description: 'Space-separated susfs4ksu branches to check. Leave empty to use the branches of every enabled matrix.json entry.'
+        required: false
+        type: string
+        default: ''
+      since_days:
+        description: 'Lookback window in days, used for any branch without a pin'
+        required: false
+        type: string
+        default: '14'
+      fail_on_risk:
+        description: 'Mark the run as failed when a branch needs a test build before its pin can move (makes it visible red in the sidebar)'
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  check-susfs:
+    name: Check susfs4ksu
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.x'
+
+      - name: Check susfs4ksu against pins
+        id: check
+        # check_susfs.py exits 0 when everything is fine, 1 on a real
+        # error (bad pin, missing branch) and 2 when --fail-on-risk is
+        # set and a branch needs testing. Exit 2 is a finding, not a
+        # malfunction, so it is only allowed to fail the job when the
+        # user explicitly asked for that.
+        run: |
+          cd .github/workflows/scripts
+          ARGS=()
+          if [ -n "${{ github.event.inputs.susfs_pin }}" ]; then
+            ARGS+=(--pin "${{ github.event.inputs.susfs_pin }}")
+          fi
+          for b in ${{ github.event.inputs.branches }}; do
+            ARGS+=(--branch "$b")
+          done
+          if [ -n "${{ github.event.inputs.since_days }}" ]; then
+            ARGS+=(--since-days "${{ github.event.inputs.since_days }}")
+          fi
+          if [ "${{ github.event.inputs.fail_on_risk }}" == "true" ]; then
+            ARGS+=(--fail-on-risk)
+          fi
+          python3 check_susfs.py --github-summary "${ARGS[@]}"
