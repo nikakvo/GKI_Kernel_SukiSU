@@ -128,7 +128,7 @@ your data, so nothing is lost.
 - **Droidspaces** — SysV IPC, POSIX message queues and IPC namespaces
 - **Baseband-guard** — modem partition write protection
 - **MGLRU** and **PSI** memory management
-- **WireGuard**, **CIFS/SMB**, **FUSE-BPF**, **BTF/eBPF**
+- **WireGuard**, **CIFS/SMB** with POSIX extensions, **FUSE-BPF**, **BTF/eBPF**
 - **ptrace leak fix** and **unicode bypass fix**
 - **Full LTO**
 - KMI-safe: no `__GENKSYMS__` tricks, no reserve-slot guessing
@@ -489,13 +489,21 @@ active. `0x0000` would mean it is compiled in but switched off.
 ### WireGuard, CIFS/SMB, FUSE-BPF
 
 WireGuard in-kernel means VPN apps use the kernel implementation instead of
-the slower userspace one. CIFS lets you mount SMB shares directly. FUSE-BPF
-speeds up FUSE operations, which Android uses heavily for `/storage`.
+the slower userspace one. CIFS lets you mount SMB shares directly, with
+POSIX extensions enabled — real UID/GID, symlinks and device nodes are
+preserved when the server supports them, instead of the Windows-style
+approximation. FUSE-BPF speeds up FUSE operations, which Android uses
+heavily for `/storage`.
 
 ```bash
 su -c 'zcat /proc/config.gz | grep -E "WIREGUARD|^CONFIG_CIFS|FUSE_BPF"'
 su -c 'cat /proc/filesystems | grep cifs'
 ```
+
+`CONFIG_CIFS_POSIX=y` should appear alongside `CONFIG_CIFS_XATTR=y`. Note
+that `CONFIG_CIFS_ALLOW_INSECURE_LEGACY=y` in that output comes from stock
+GKI — Google enables it — and is a dependency of the POSIX extensions, not
+something this build turns on to permit SMB1.
 
 If you have a WireGuard tunnel up, it appears as an interface:
 
