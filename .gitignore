@@ -1,0 +1,11 @@
+# Python bytecode from running the build scripts locally
+__pycache__/
+*.py[cod]
+
+# Local build logs written by build-kernel.sh
+build-*.log
+
+# Never commit a build workspace or its artifacts
+gki-workspace/
+*.img
+*-AnyKernel3*.zip
