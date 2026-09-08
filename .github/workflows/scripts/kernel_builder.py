@@ -191,14 +191,10 @@ CONFIG_BPF_EVENTS=y
     # _expected_config_symbols() re-checks every line below against the
     # produced .config so that failure mode cannot go unnoticed.
     #
-    # Two things deliberately left out despite other GKI projects
-    # shipping them:
-    #   CONFIG_CIFS_POSIX - depends on CIFS_ALLOW_INSECURE_LEGACY, i.e.
-    #     it cannot be enabled without turning SMB1 back on. Not worth
-    #     it; CIFS_XATTR alone gives the useful half.
-    #   CONFIG_NFT_FIB* - NFT_FIB_INET has hard `depends on` (not
-    #     select) chains through NFT_FIB_IPV4/IPV6, and reverse-path
-    #     matching is not why anyone wants nftables here.
+    # One thing deliberately left out despite other GKI projects
+    # shipping it: CONFIG_NFT_FIB* - NFT_FIB_INET has hard `depends on`
+    # (not select) chains through NFT_FIB_IPV4/IPV6, and reverse-path
+    # matching is not why anyone wants nftables here.
     EXTRA_NET_CONFIG_TEMPLATE = """
 # === ipset: the four set types stock GKI leaves out ===
 # The MAC-keyed types are the ones worth having - filtering by hardware
@@ -261,6 +257,15 @@ CONFIG_NFT_TPROXY=y
 # compiled in stock GKI) and NF_CONNTRACK_MARK (already set above).
 CONFIG_NET_ACT_CONNMARK=y
 CONFIG_INET_RAW_DIAG=y
+# CIFS_POSIX depends on CIFS && CIFS_ALLOW_INSECURE_LEGACY &&
+# CIFS_XATTR. It was skipped at first on the assumption that
+# CIFS_ALLOW_INSECURE_LEGACY would have to be turned on for it - but a
+# /proc/config.gz check on a built kernel showed stock GKI already
+# ships that symbol enabled, so the dependency is met without touching
+# anything. It adds POSIX extensions (real UID/GID, symlinks, device
+# nodes) when mounting a Samba server that supports them; SMB1 is not
+# involved either way.
+CONFIG_CIFS_POSIX=y
 CONFIG_CIFS_XATTR=y
 """
 
