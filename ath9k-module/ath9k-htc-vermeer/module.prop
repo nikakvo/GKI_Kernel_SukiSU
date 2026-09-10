@@ -1,0 +1,6 @@
+id=ath9k_htc_vermeer
+name=ath9k_htc (AR9271) for vermeer
+version=v1.0
+versionCode=1
+author=Tears Burn
+description=Loads ath9k_htc + deps at boot and provides htc_9271-1.4.0.fw so a TP-Link TL-WN722N v1 (AR9271) works over OTG. Requires a kernel built with CONFIG_ATH9K_HTC=m. Does not touch the vendor wireless stack.

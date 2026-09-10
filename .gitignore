@@ -10,6 +10,6 @@ gki-workspace/
 *.img
 *-AnyKernel3*.zip
 *.bak
-ath9k_htc_vermeer.zip
-ath9k-htc-vermeer/
-make-ath9k-module.sh
+/ath9k_htc_vermeer.zip
+/ath9k-htc-vermeer/
+/make-ath9k-module.sh
