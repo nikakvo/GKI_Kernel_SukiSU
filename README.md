@@ -1,8 +1,23 @@
-# GKI SukiSU-Ultra + SUSFS Build System
+# GKI SukiSU-Ultra + SUSFS Build System — Poco F6 Pro
 
-### An automated build system for GKI kernels with SukiSU-Ultra and SUSFS
+### An automated build system for GKI kernels with SukiSU-Ultra and SUSFS, built and tested for the Poco F6 Pro / Redmi K70 (`vermeer`)
 
-> Does not support OnePlus ColorOS 14/15 or non-GKI devices
+> **Scope — read this first.** This project is developed, built and tested
+> for **one target: `android13-5.15` on the Poco F6 Pro / Redmi K70
+> (`vermeer`)**. That is the only configuration I actually flash and run.
+> Because it produces a standard GKI kernel, it will also boot on other
+> devices sharing the same `android13-5.15` GKI base — but I don't test
+> those, so treat them as use-at-your-own-risk.
+>
+> The build scripts *can* target other Android/kernel families
+> (`android12-5.10`, `android14-6.1` are tracked in the matrix), and you're
+> free to try them — but they are **not tested and not supported**.
+> `android15-6.6` and newer are **known to break** (the build failed
+> outright when tried) and are left disabled. If you build anything other
+> than `android13-5.15` for `vermeer`, you're on your own, and a working
+> boot.img backup is mandatory.
+
+> Does not support OnePlus ColorOS 14/15 or non-GKI devices.
 
 > If this is your first time using it, please **read the following carefully** — don't waste other people's time out of laziness!
 
@@ -10,17 +25,30 @@
 
 ---
 
+## What's tested vs. what merely builds
+
+| Target | Status |
+|--------|--------|
+| `android13-5.15` on `vermeer` (Poco F6 Pro / K70) | **Built, flashed, tested, daily-driven.** This is the project. |
+| Other `android13-5.15` devices | Should boot (standard GKI), but untested — your risk. |
+| `android12-5.10`, `android14-6.1` | Tracked in the matrix, scripts attempt them, **untested** — may or may not work. |
+| `android15-6.6` and newer | **Known broken** — build fails. Left disabled in the matrix. |
+
+The current tested release is `android13-5.15.211` (LTS), tag
+`android13-5.15.211_r00`, kernel string `5.15.211-android13-r00-lts`.
+
+
 ## Credits & Origin
 
 This project builds on the work of others in the GKI/KernelSU ecosystem:
 
 - **[ShirkNeko/GKI_KernelSU_SUSFS](https://github.com/ShirkNeko/GKI_KernelSU_SUSFS)** — the original build system this project was originally forked from. The overall build.py/kernel_builder.py architecture traces back to this project.
 - **[SukiSU-Ultra](https://github.com/SukiSU-Ultra/SukiSU-Ultra)** — the KernelSU implementation this build system compiles into every kernel.
-- **[susfs4ksu](https://github.com/sidex15/susfs4ksu-module)** and **[ShirkNeko/SukiSU_patch](https://github.com/ShirkNeko/SukiSU_patch)** — SUSFS kernel patches and supplementary SukiSU-Ultra patches (ZRAM, hooks).
+- **[susfs4ksu](https://gitlab.com/simonpunk/susfs4ksu)** and **[ShirkNeko/SukiSU_patch](https://github.com/ShirkNeko/SukiSU_patch)** — SUSFS kernel patches and supplementary SukiSU-Ultra patches (ZRAM, hooks).
 - **[WildKernels/kernel_patches](https://github.com/WildKernels/kernel_patches)** — the BBRv3 backport patches (`common/bbrv3`) vendored for the [BBRv3 Support](#bbrv3-support) feature.
 - **[ravindu644/Droidspaces-OSS](https://github.com/ravindu644/Droidspaces-OSS)** — the container-runtime app and kABI-compliant kernel patches vendored for the [Droidspaces Support](#droidspaces-support) feature. The [WildKernels/GKI_KernelSU_SUSFS](https://github.com/WildKernels/GKI_KernelSU_SUSFS) actions were the reference for how to wire Droidspaces into a GKI build pipeline.
 
-This repository has since diverged significantly from the original fork (exact GKI respin pinning including LTS-merge tags/commits, automatic matrix updates, local-build tooling, AVB signing, safe-mode removal, and more — see below), and is now maintained as an independent project.
+This repository has since diverged significantly from the original fork (exact GKI respin pinning including LTS-merge tags/commits, automatic matrix updates, local-build tooling, AVB signing, safe-mode removal, ath9k_htc adapter support, and more — see below), and is now maintained as an independent project.
 
 ---
 
@@ -31,21 +59,21 @@ This repository has since diverged significantly from the original fork (exact G
 The fastest way to build — handles dependency installation automatically, no manual setup needed.
 
 ```bash
-git clone https://github.com/nikakvo/GKI_KernelSU_SUSFS
-cd GKI_KernelSU_SUSFS
+git clone https://github.com/nikakvo/GKI_Kernel_SukiSU
+cd GKI_Kernel_SukiSU
 chmod +x build-kernel.sh cleanup-workspace.sh
 ./build-kernel.sh
 ```
 
-You'll get a menu:
+The tested default is `android13-5.15.211` (see the scope note above). You'll get a menu:
 ```
-1) Default (android13 / 5.15 / 194 / 2025-12)
+1) Default (android13 / 5.15 / 211 / 2026-06)
 2) Custom (choose your own versions)
 3) All versions from matrix.json
 ```
 
-- **Option 1** builds the latest known-good default configuration.
-- **Option 2** lets you pick any Android/kernel/sub_level/os_patch combination, plus optionally pin an exact GKI respin tag (see [Exact Source Pinning](#exact-source-pinning-kernel-tag) below).
+- **Option 1** builds the tested default configuration for `vermeer`.
+- **Option 2** lets you pick any Android/kernel/sub_level/os_patch combination, plus optionally pin an exact GKI respin tag (see [Exact Source Pinning](#exact-source-pinning-kernel-tag) below). Anything other than `android13-5.15` is untested — see the scope note at the top.
 - **Option 3** builds every `"enabled": true` entry in `matrix.json` sequentially, with a per-build pass/fail summary at the end.
 
 The script auto-installs everything it needs on first run (git, build-essential, ccache, PyYAML, etc.) — no separate setup step required, even on a clean Ubuntu/WSL install.
@@ -57,6 +85,8 @@ When you're done, reclaim disk space with:
 (wipes only the per-version build directories — `.repo/`, `common/`, `prebuilts/` — keeps shared repos and the AVB signing key intact)
 
 ### GitHub Actions
+
+> **CI builds thin LTO, not full.** Full LTO peaks around 27 GB RAM, more than a GitHub runner has, so Actions builds use thin LTO. These are usable but are **not** the tested release binaries — the official releases are built locally with full LTO and flashed on-device first.
 
 #### Method 1: Build a single version
 1. Go to the **Actions** tab
@@ -75,11 +105,8 @@ When you're done, reclaim disk space with:
 cd .github/workflows/scripts
 pip install PyYAML
 
-# Build a single version
-python3 build.py --android android13 --kernel 5.15 --sub-level 194 --os-patch 2025-12 --zram --bbr-version bbr1
-
-# Pin an exact GKI respin (recommended - see below)
-python3 build.py --android android13 --kernel 5.15 --sub-level 194 --os-patch 2025-12 --kernel-tag android13-5.15-2025-12_r10
+# Build the tested default (android13-5.15.211, vermeer)
+python3 build.py --android android13 --kernel 5.15 --sub-level 211 --os-patch 2026-06 --kernel-tag android13-5.15.211_r00 --ath9k
 
 # List supported Android/Kernel combinations
 python3 build.py --list-configs
@@ -101,10 +128,10 @@ python3 build.py --android android13 --kernel 5.15 --sub-level 194 --os-patch 20
     --kernel-tag android13-5.15-2025-12_r10
 ```
 
-**A per-sublevel LTS-merge tag** (e.g. `android13-5.15.209_r00`) — see [LTS Builds](#lts-builds) below for what these are:
+**A per-sublevel LTS-merge tag** (e.g. `android13-5.15.211_r00`) — see [LTS Builds](#lts-builds) below for what these are:
 ```bash
-python3 build.py --android android13 --kernel 5.15 --sub-level 209 --os-patch 2026-06 \
-    --kernel-tag android13-5.15.209_r00
+python3 build.py --android android13 --kernel 5.15 --sub-level 211 --os-patch 2026-06 \
+    --kernel-tag android13-5.15.211_r00
 ```
 
 **A raw commit SHA** (7-40 hex chars) — for when an LTS-merge has already landed on Google's `android*-lts` branch but no official `_r00` tag has been cut for it yet:
@@ -120,7 +147,7 @@ Find the latest respin/tag for your target branch at:
 
 **If the tag/SHA doesn't actually exist upstream, the build fails immediately with a clear error** rather than silently falling back to the moving branch HEAD — a build that silently compiles a different, real sub_level while every filename still claims to be the one you asked for is far worse than a build that just refuses to start.
 
-The resulting kernel release string reflects the pinned respin (e.g. `5.15.194-android13-r10`) instead of an ambiguous moving-HEAD version.
+The resulting kernel release string reflects the pinned respin (e.g. `5.15.211-android13-r00-lts`) instead of an ambiguous moving-HEAD version.
 
 ---
 
@@ -129,12 +156,12 @@ The resulting kernel release string reflects the pinned respin (e.g. `5.15.194-a
 Google maintains two parallel ways of keeping a GKI branch (e.g. `android13-5.15`) up to date:
 
 1. **Date-based respins** (`android13-5.15-2026-06_r4`) — periodic official snapshots, each covering a specific month's security patch level. This is the classic, fully-certified GKI release process.
-2. **LTS merges** (`android13-5.15.209_r00`) — once a branch's date-based cadence winds down, Google instead periodically merges the upstream Linux `5.15.y` **-stable** tree (maintained by Greg Kroah-Hartman) straight into a sibling `android13-5.15-lts` branch, and eventually tags the result. These trade the full GKI certification process for staying current with upstream kernel security fixes.
+2. **LTS merges** (`android13-5.15.211_r00`) — once a branch's date-based cadence winds down, Google instead periodically merges the upstream Linux `5.15.y` **-stable** tree (maintained by Greg Kroah-Hartman) straight into a sibling `android13-5.15-lts` branch, and eventually tags the result. These trade the full GKI certification process for staying current with upstream kernel security fixes.
 
 Both are real, both are buildable, and this project builds either kind identically — LTS is not a separate build mode, just a different tag naming scheme on Google's end. To make it obvious which is which downstream, any build sourced from an LTS-merge respin (dot-style tag or raw SHA) gets a `-lts` marker appended:
 
-- **Filename:** `android13-5.15.209-2026-06-r00-lts-boot.img` (vs. `android13-5.15.206-2026-06-r4-boot.img` for a regular respin)
-- **On-device kernel version** (visible in KernelSU/SukiSU-Ultra manager): `5.15.209-android13-r00-lts` (vs. `5.15.206-android13-r4`)
+- **Filename:** `android13-5.15.211-2026-06-lto-full-r00-lts-boot.img` (vs. `android13-5.15.206-2026-06-r4-boot.img` for a regular respin)
+- **On-device kernel version** (visible in KernelSU/SukiSU-Ultra manager): `5.15.211-android13-r00-lts` (vs. `5.15.206-android13-r4`)
 - If pinned by raw commit SHA (no official tag yet), the respin number is simply omitted rather than showing an unreadable hash: `android13-5.15.211-2026-06-lts-boot.img` / `5.15.211-android13-lts`
 
 This is detected automatically from the `kernel_tag`'s own format (a dot immediately before the sub_level number, or a bare SHA) — you never need to flag a build as LTS by hand.
@@ -160,26 +187,11 @@ This queries Google's `kernel/common` repository directly (`git ls-remote --tags
 
 New entries are added as `"enabled": false` (opt-in); existing entries get their `kernel_tag`/`sub_level` refreshed without touching your `enabled` choices. A commit-SHA-pinned entry (see [LTS Builds](#lts-builds)) is left untouched until Google actually cuts the matching official tag, at which point it's automatically upgraded from the SHA to the real tag.
 
-You can sanity-check what's currently enabled at any time with:
-```bash
-python3 check_matrix.py
-```
-Prints every `"enabled": true` entry and whether it has a `kernel_tag` pinned (an entry without one will build from the moving branch HEAD - see [Exact Source Pinning](#exact-source-pinning-kernel-tag) above).
-
-Tracked families: `android12-5.10`, `android13-5.15`, `android14-6.1`, `android15-6.6`, `android16-6.12`, `android17-6.18`.
-
-> **Note on android16/17:** SukiSU-Ultra does not yet fully support kernel 6.12+ — see [SukiSU-Ultra#921](https://github.com/SukiSU-Ultra/SukiSU-Ultra/issues/921) (`netlink_kernel_cfg`/`security_add_hooks` API breakage). These entries are tracked for when upstream support lands, but currently fail to compile. Leave them `"enabled": false` until that issue is resolved.
-
-> **Note on android15/16/17 build system:** this project's entire build pipeline (`kernel_builder.py`) is written against the legacy `build/build.sh` framework (`BUILD_CONFIG=common/build.config.gki.aarch64 build/build.sh`), which is what `android12-5.10` through `android14-6.1` still use. Starting with `android15-6.6`, Google's kernel/common branches build exclusively through **Bazel/Kleaf** (`tools/bazel run //common:kernel_aarch64_dist`) — a fundamentally different build invocation, artifact/output layout, and a hermetic self-contained toolchain instead of a system-installed `clang`/`ccache`. None of that is wired up here yet. Combined with the SukiSU-Ultra 6.12+ compatibility gap above, **only `android12-5.10`, `android13-5.15`, and `android14-6.1` are actually buildable with this project right now** — `android15-6.6`/`android16-6.12`/`android17-6.18` matrix entries exist purely for future tracking and will fail if enabled.
+Tracked families: `android12-5.10`, `android13-5.15`, `android14-6.1`, `android15-6.6`, `android16-6.12`, `android17-6.18`. **Only `android13-5.15` is tested** (see scope note at top) — `android12` and `android14` entries are tracked and attempted but unverified; `android15-6.6` and newer are left with no enabled entries because they currently fail to build.
 
 Each entry looks like:
 ```json
-{"sub_level": "194", "os_patch_level": "2025-12", "kernel_tag": "android13-5.15-2025-12_r10", "enabled": true}
-```
-
-An LTS-merge entry additionally carries `"lts": true` (cosmetic only — see [LTS Builds](#lts-builds)):
-```json
-{"sub_level": "209", "os_patch_level": "2026-06", "kernel_tag": "android13-5.15.209_r00", "lts": true, "enabled": true}
+{"sub_level": "211", "os_patch_level": "2026-06", "kernel_tag": "android13-5.15.211_r00", "lts": true, "enabled": true}
 ```
 
 ---
@@ -188,13 +200,13 @@ An LTS-merge entry additionally carries `"lts": true` (cosmetic only — see [LT
 
 | Argument | Description | Default |
 |------|------|--------|
-| `--android`, `-a` | Android version (android12–android17) | android14 |
+| `--android`, `-a` | Android version (android12-android17) | android14 |
 | `--kernel`, `-k` | Kernel version (5.10/5.15/6.1/6.6/6.12/6.18) | 6.1 |
-| `--sub-level`, `-s` | Sub level version (e.g. `194`, `209`) | 124 |
+| `--sub-level`, `-s` | Sub level version (e.g. `194`, `211`) | 124 |
 | `--os-patch` | OS Patch Level | 2025-02 |
 | `--kernel-tag` | Pin an exact GKI respin instead of the moving branch HEAD — accepts a date-based tag, an LTS-merge tag, or a raw commit SHA (see [Exact Source Pinning](#exact-source-pinning-kernel-tag)) | - |
 | `--lts` | Explicitly mark the build as LTS-sourced. Rarely needed — auto-detected from `--kernel-tag`'s format (see [LTS Builds](#lts-builds)) | False (auto-detected) |
-
+| `--ath9k` | Build ath9k_htc + ath9k_common + ath9k_hw + ath as out-of-tree modules for a TL-WN722N v1 (AR9271) USB adapter (see [ath9k_htc](#ath9k_htc--external-wifi-adapter-support---ath9k)) | False |
 | `--revision` | Android 12 revision (used for certified-boot reference downloads) | - |
 | `--ksu-version` | SukiSU-Ultra version (Stable/Dev) | Stable |
 | `--ksu-commit` | Specify a SukiSU-Ultra commit hash | latest |
@@ -214,6 +226,56 @@ An LTS-merge entry additionally carries `"lts": true` (cosmetic only — see [LT
 
 ---
 
+
+## ath9k_htc — external WiFi adapter support (`--ath9k`)
+
+Adds support for a **TP-Link TL-WN722N v1** (Atheros AR9271) USB WiFi adapter
+over OTG — monitor mode and packet injection — while leaving the phone's
+built-in WiFi fully working. Intended for WiFi security testing on **your own
+networks** (Kali / NetHunter-style workflows, on the phone instead of a
+laptop). Enable with `--ath9k` (on by default in `build-kernel.sh`).
+
+### How it works (and why not the obvious way)
+
+GKI ships **no** wireless stack — `gki_defconfig` defines neither
+`CONFIG_CFG80211` nor `CONFIG_MAC80211`; the real stack is Qualcomm's,
+loaded as vendor modules from `/vendor/lib/modules`. The naive fix
+(`CFG80211=y`/`MAC80211=y`) builds a second copy of that symbol surface into
+the image, which stops the vendor's `qca_cld3`/`kiwi_v2` from loading and
+**kills internal WiFi**.
+
+Instead, `--ath9k` builds `ath9k_htc` + `ath9k_common` + `ath9k_hw` + `ath`
+as **out-of-tree modules** (`=m`, never `=y`) linked against the vendor
+stack. The GKI image's wireless config is left untouched, so internal WiFi is
+never disturbed. The built `cfg80211.ko`/`mac80211.ko` are deliberately **not**
+packaged — the device uses Qualcomm's.
+
+Post-build, the modules' exported-symbol CRCs are verified against the
+device's actual vendor `cfg80211`/`mac80211` before release, so a module that
+couldn't load never ships.
+
+### Using it
+
+The kernel alone isn't enough — the driver needs firmware and needs loading
+at boot. That's handled by a separate flashable module,
+**`ath9k_htc_vermeer.zip`** (attached to each release; source in
+[`ath9k-module/`](ath9k-module/)).
+
+1. Flash the kernel (built with `--ath9k`).
+2. Install `ath9k_htc_vermeer.zip` in your root manager.
+3. Reboot, plug the antenna in over OTG.
+
+See [`ath9k-module/README.md`](ath9k-module/README.md) for details, including
+the note that **the antenna LED won't light** (intentional — the vendor
+`mac80211` doesn't export the LED-trigger symbols, and forcing them would stop
+the driver loading; everything else works).
+
+**Adapter must be v1.** The TL-WN722N v2 and v3 are a Realtek chip and will
+not work with this driver.
+
+
+---
+
 ## Downloads
 
 1. **AnyKernel3.zip** — ready to flash!
@@ -223,6 +285,8 @@ An LTS-merge entry additionally carries `"lts": true` (cosmetic only — see [LT
    - Flash via `fastboot flash boot_ab <filename>`
    - Every boot image is AVB-signed with a canonical key kept in sync between local and CI builds (see [AVB Signing](#avb-signing) below).
 
+3. **ath9k_htc_vermeer.zip** — the companion module for the ath9k adapter (see [ath9k_htc](#ath9k_htc--external-wifi-adapter-support---ath9k)). Only needed if you use a TL-WN722N v1.
+
 ---
 
 ## Supported Features
@@ -231,6 +295,7 @@ An LTS-merge entry additionally carries `"lts": true` (cosmetic only — see [LT
 |------|------|
 | [KernelSU / SukiSU-Ultra](https://github.com/SukiSU-Ultra/SukiSU-Ultra) | Kernel-level root solution |
 | [SUSFS4](https://gitlab.com/simonpunk/susfs4ksu) | Kernel-level patches that assist KSU in hiding root |
+| [ath9k_htc](ath9k-module/) | External TL-WN722N v1 (AR9271) WiFi adapter over OTG — monitor + injection (`--ath9k`). Ships as a flashable module. |
 | BBR v1 | TCP congestion control algorithm |
 | [BBRv3](https://github.com/WildKernels/kernel_patches/tree/main/common/bbrv3) | Newer TCP congestion control (`--bbr-version bbr3`) — android12/13/14 only. See [BBRv3 Support](#bbrv3-support) below. |
 | [LZ4KD](https://github.com/ShirkNeko/SukiSU_patch/tree/main/other) | ZRAM compression algorithm sourced from Huawei's codebase |
@@ -255,7 +320,7 @@ LZ4K, LZ4HC, deflate, 842, lz4k_oplus
 
 [BBRv3](https://github.com/WildKernels/kernel_patches/tree/main/common/bbrv3) is Google's newer TCP congestion control algorithm — an evolution of the widely-used BBRv1 already shipped by default. Backport patches are vendored from WildKernels (also the source of the Droidspaces integration above), pre-adjusted for Android kABI compliance. Enable it with `--bbr-version bbr3` (or the `BBR congestion control version` choice in either GitHub Actions workflow, or `BBR_VERSION="bbr3"` in `build-kernel.sh`).
 
-**Currently wired up for `android12-5.10`, `android13-5.15`, and `android14-6.1` only** — the three branches this project builds. (WildKernels also publish an `android15-6.6` variant; not vendored here since nothing currently built targets that branch — trivial to add later.)
+**Currently wired up for `android12-5.10`, `android13-5.15`, and `android14-6.1` only** — though only `android13-5.15` is tested. (WildKernels also publish an `android15-6.6` variant; not vendored here since nothing currently built targets that branch.)
 
 Two small prerequisite patches (`proc_dou8vec_minmax()` and a follow-up data-race fix, both from mainline `-stable`) are applied first if missing — on the sub_levels this project currently builds they're almost certainly already present via normal upstream updates, so this is expected to be a silent no-op in practice.
 
@@ -273,11 +338,11 @@ su -c "sysctl net.ipv4.tcp_available_congestion_control"   # should list bbr3 am
 
 [Droidspaces](https://github.com/ravindu644/Droidspaces-OSS) is a lightweight, LXC-like container runtime for Android — real Linux namespace isolation (PID, IPC, Mount) so a full Linux distro can run with its own genuine init system (systemd, OpenRC), instead of a plain chroot that just shares the host's process tree. Enable it with `--droidspaces` (or the `Enable Droidspaces` toggle in either GitHub Actions workflow, or `DROIDSPACES="1"` in `build-kernel.sh`).
 
-**Currently wired up for `android12-5.10`, `android13-5.15`, and `android14-6.1` only** — the three branches this project builds. Google's GKI enforces a strict kABI (Kernel Module Interface) checksum on struct layouts, so naively enabling `CONFIG_SYSVIPC`/`CONFIG_IPC_NS`/`CONFIG_POSIX_MQUEUE` without a matching patch causes an **immediate bootloop**. This flag applies the upstream kABI-safe patch (moving the relevant fields into Android's reserved padding slots) before turning those options on — three slot-layout variants are vendored and tried in order (strict, no-fuzz matching) since which `ANDROID_KABI_RESERVE` slots are still free isn't identical across every branch/respin; whichever one actually fits this exact source tree is used. If none of the three fit, the build continues without Droidspaces rather than risking a silent kABI break (check the [patch status summary](#build-matrix) — a `FAIL` on `Droidspaces` means this happened).
+**Currently wired up for `android12-5.10`, `android13-5.15`, and `android14-6.1`** — though only `android13-5.15` is tested. Google's GKI enforces a strict kABI (Kernel Module Interface) checksum on struct layouts, so naively enabling `CONFIG_SYSVIPC`/`CONFIG_IPC_NS`/`CONFIG_POSIX_MQUEUE` without a matching patch causes an **immediate bootloop**. This flag applies the upstream kABI-safe patch (moving the relevant fields into Android's reserved padding slots) before turning those options on — three slot-layout variants are vendored and tried in order (strict, no-fuzz matching) since which `ANDROID_KABI_RESERVE` slots are still free isn't identical across every branch/respin; whichever one actually fits this exact source tree is used. If none of the three fit, the build continues without Droidspaces rather than risking a silent kABI break (check the [patch status summary](#build-matrix) — a `FAIL` on `Droidspaces` means this happened).
 
 Applied *after* SUSFS/SukiSU-Ultra in the build sequence deliberately — if there's ever a real conflict over the same kABI reserve slots, it's this optional feature that loses, never the project's core functionality.
 
-Once built, verify and use it via the [Droidspaces Android app](https://github.com/ravindu644/Droidspaces-OSS) (Settings → Requirements → Check Requirements).
+Once built, verify and use it via the [Droidspaces Android app](https://github.com/ravindu644/Droidspaces-OSS) (Settings -> Requirements -> Check Requirements).
 
 ---
 
@@ -308,68 +373,30 @@ fastboot flash boot_ab <full_boot.img_filename>
 
 ---
 
-## Kernel Version Compatibility Notes
-
-### 1. Cross sub-version flashing rules
-
-If your phone's main GKI version is 5.10.x (e.g. 5.10.168), you can flash a kernel with a higher sub-version under the same major version (e.g. 5.10.198).
-
-### 2. Kernel version spoofing method
-
-Run the following in an MT Manager terminal:
-```bash
-uname -r | sed 's/^[^-]*//'
-```
-Copy the resulting version string and paste it into the build panel to spoof the kernel version.
-
----
-
 ## Build System Architecture
 
 ```
-.github/
-├── actions/
-│   ├── cache-restore/
-│   │   └── action.yml         # Restores build cache from a GitHub Releases asset
-│   └── cache-save/
-│       └── action.yml         # Saves build cache to a GitHub Releases asset
-└── workflows/
-    ├── config/
-    │   ├── matrix.json           # Build matrix - kept current by update_matrix.py
-    │   └── update_matrix.py      # Refreshes matrix.json from Google's kernel/common tags
-    ├── scripts/
-    │   ├── build.py               # Main build script (CLI entry point)
-    │   ├── kernel_builder.py      # Core kernel build class
-    │   ├── config.py              # Configuration definitions and validation
-    │   ├── check_matrix.py        # Sanity-check CLI: lists enabled matrix.json entries and flags any missing a kernel_tag
-    │   ├── matrix_generator.py    # GitHub Actions matrix generator
-    │   ├── patch_summary.py       # Aggregates per-build patch status into one CI summary table
-    │   ├── release_generator.py   # Release notes generator
-    │   ├── extract_artifacts.py   # Collects build artifacts for release
-    │   ├── telegram_notify.py     # Optional Telegram build notifications
-    │   └── patches/
-    │       ├── bbrv3_android12-5.10.patch
-    │       ├── bbrv3_android13-5.15.patch
-    │       ├── bbrv3_android14-6.1.patch
-    │       ├── bbrv3_prereq_sysctl_dou8vec_minmax.patch
-    │       ├── bbrv3_prereq_sysctl_dou8vec_minmax_races.patch
-    │       ├── disable-safemode-full.patch
-    │       ├── droidspaces_posix_mqueue_5_10.patch
-    │       ├── droidspaces_sysvipc_kabi_slots123.patch
-    │       ├── droidspaces_sysvipc_kabi_slots345.patch
-    │       ├── droidspaces_sysvipc_kabi_slots678.patch
-    │       ├── gki_ptrace.patch
-    │       ├── ntsync_base.patch
-    │       ├── ntsync_compat_android12-5.10.patch
-    │       ├── ntsync_compat_android12-5.10_A14.patch
-    │       ├── ntsync_compat_android13-5.15.patch
-    │       ├── ntsync_compat_android14-6.1.patch
-    │       ├── ntsync_compat_android15-6.6.patch
-    │       └── ntsync_compat_android16-6.12.patch
-    ├── update-matrix.yml          # Scheduled workflow that runs update_matrix.py
-    ├── kernel-build.yml           # Single-version build workflow
-    └── build-kernels.yml          # Full matrix build workflow
+.github/workflows/
+├── config/
+│   ├── matrix.json           # Build matrix - kept current by update_matrix.py
+│   └── update_matrix.py      # Refreshes matrix.json from Google's kernel/common tags
+├── scripts/
+│   ├── build.py               # Main build script (CLI entry point)
+│   ├── kernel_builder.py      # Core kernel build class
+│   ├── config.py              # Configuration definitions and validation
+│   ├── matrix_generator.py    # GitHub Actions matrix generator
+│   ├── patch_summary.py       # Aggregates per-build patch status into one CI summary table
+│   ├── release_generator.py   # Release notes generator
+│   ├── extract_artifacts.py   # Collects build artifacts for release
+│   ├── telegram_notify.py     # Optional Telegram build notifications
+│   ├── ath9k/                 # ath9k module fragment, CRC table, symbol verifier
+│   ├── firmware/ath9k_htc/    # htc_9271-1.4.0.fw
+│   └── patches/               # kernel patches (bbrv3, ntsync, droidspaces, ath9k LEDS, ...)
+├── update-matrix.yml          # Scheduled workflow that runs update_matrix.py
+├── kernel-build.yml           # Single-version build workflow
+└── build-kernels.yml          # Full matrix build workflow
 
+ath9k-module/                  # Source of the ath9k_htc_vermeer.zip flashable module
 build-kernel.sh                # Local interactive build menu (recommended entry point)
 cleanup-workspace.sh           # Reclaims disk space between builds
 ```
@@ -381,7 +408,6 @@ cleanup-workspace.sh           # Reclaims disk space between builds
 | `KernelBuilder` | Core kernel build class — handles cloning source, applying patches, compiling, and packaging |
 | `BuildConfig` | Build configuration data class containing all build parameters |
 | `update_matrix.py` | Queries Google's kernel/common tags directly and keeps matrix.json current |
-| `check_matrix.py` | Local sanity-check CLI — prints every enabled matrix.json entry and warns if any is missing a pinned `kernel_tag` |
 | `matrix_generator.py` | Generates the build matrix for the GitHub Actions matrix build |
 | `patch_summary.py` | Aggregates per-build patch application status into one summary table in the CI job summary |
 | `release_generator.py` | Automatically generates Release notes |
@@ -394,7 +420,6 @@ cleanup-workspace.sh           # Reclaims disk space between builds
 | [susfs4ksu](https://gitlab.com/simonpunk/susfs4ksu) | SUSFS kernel patches |
 | [SukiSU_patch](https://github.com/ShirkNeko/SukiSU_patch) | Additional SukiSU-Ultra patches (ZRAM, hooks) |
 | [AnyKernel3](https://github.com/WildPlusKernel/AnyKernel3) | Generic flashable package template |
-| [kernel_patches](https://github.com/Tools-cx-app/kernel_patches) | Kernel patch collection |
 | [Baseband-guard](https://github.com/vc-teahouse/Baseband-guard) | Baseband security protection |
 
 ---
