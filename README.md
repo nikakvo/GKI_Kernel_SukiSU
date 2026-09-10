@@ -65,6 +65,12 @@ chmod +x build-kernel.sh cleanup-workspace.sh
 ./build-kernel.sh
 ```
 
+The tested releases pin known-good SukiSU-Ultra and SUSFS commits (see [Pinning SukiSU-Ultra / SUSFS](#pinning-sukisu-ultra--susfs---ksu-commit---susfs-commit)):
+
+```bash
+./build-kernel.sh --ksu-commit v4.2.0 --susfs-commit bca0d2333c1a7d717e7278b019d7af7ba1d16005
+```
+
 The tested default is `android13-5.15.211` (see the scope note above). You'll get a menu:
 ```
 1) Default (android13 / 5.15 / 211 / 2026-06)
@@ -167,6 +173,53 @@ Both are real, both are buildable, and this project builds either kind identical
 This is detected automatically from the `kernel_tag`'s own format (a dot immediately before the sub_level number, or a bare SHA) — you never need to flag a build as LTS by hand.
 
 `matrix.json` entries mark these with `"lts": true` (see [Build Matrix](#build-matrix) below) purely for the summary table in CI — it has no effect on the build itself.
+
+---
+
+## Pinning SukiSU-Ultra / SUSFS (`--ksu-commit`, `--susfs-commit`)
+
+By default the build tracks the latest SukiSU-Ultra and susfs4ksu. That's
+usually what you want — but SukiSU-Ultra and SUSFS are **fast-moving upstream
+projects**, and sometimes the newest commit doesn't build (an API change lands
+before the patches catch up, a hook breaks, etc.). When that happens you don't
+have to wait for the developers to fix `main` — you pin a **known-good commit**
+and build against that instead.
+
+This is exactly how the tested releases are built:
+
+```bash
+./build-kernel.sh --ksu-commit v4.2.0 --susfs-commit bca0d2333c1a7d717e7278b019d7af7ba1d16005
+```
+
+- **`--ksu-commit <ref>`** pins SukiSU-Ultra's kernel-side source to a tag
+  (e.g. `v4.2.0`) or a commit hash, instead of whatever the branch HEAD
+  happens to be.
+- **`--susfs-commit <ref>`** pins susfs4ksu to a specific commit or tag.
+
+> **Important — `--susfs-commit` is per-branch.** susfs4ksu keeps a
+> **separate branch per GKI version**, and each branch carries only its own
+> `50_add_susfs_in_gki-<android>-<kernel>.patch`. So a hash is valid for
+> **exactly one** GKI branch — the build refuses a mismatched pin. The value
+> above (`bca0d233...`) is the `gki-android13-5.15` one. The `android12-5.10`
+> equivalent is `ec785f4`.
+>
+> To pin different commits for different branches in one command, use the
+> `branch=hash` form:
+> ```bash
+> ./build-kernel.sh --ksu-commit v4.2.0 \
+>     --susfs-commit 'gki-android12-5.10=ec785f4,gki-android13-5.15=bca0d2333c1a7d717e7278b019d7af7ba1d16005'
+> ```
+
+**When to use this:** if a plain `./build-kernel.sh` starts failing somewhere
+in the SukiSU/SUSFS integration step after it was working before, the most
+likely cause is an upstream change. Pin the last commit you know built cleanly
+(or the one a given release used) and you're unblocked without waiting for an
+upstream fix. Leaving both unset just tracks the latest, which is fine when
+upstream is healthy.
+
+The two are best pinned **together** — SUSFS's integration patch targets a
+specific SukiSU-Ultra source layout, so mixing a pinned SUSFS with a moving
+SukiSU (or vice versa) can drift out of sync.
 
 ---
 
