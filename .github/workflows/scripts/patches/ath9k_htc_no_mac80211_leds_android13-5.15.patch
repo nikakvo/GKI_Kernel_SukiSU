@@ -1,0 +1,31 @@
+From: GKI_Kernel_SukiSU pipeline
+Subject: [PATCH] ath9k_htc: не форсирай MAC80211_LEDS
+
+ATH9K_HTC прави `select MAC80211_LEDS if LEDS_CLASS=y`, а GKI има
+LEDS_CLASS=y (през CONFIG_LEDS_CLASS_FLASH=y). Select не може да се
+изключи с defconfig фрагмент — Kconfig го връща.
+
+Ако MAC80211_LEDS е включен, inline-ите в include/net/mac80211.h
+сочат към __ieee80211_create_tpt_led_trigger и
+__ieee80211_get_radio_led_name. Вендорският mac80211.ko на устройството
+не експортира нито един от двата (0 LED символа в .ko), значи
+ath9k_htc.ko би останал с неразрешими символи при insmod.
+
+Самият MAC80211_LEDS не влияе на CRC — всичките 6 негови референции в
+mac80211.h са в тела на static inline функции, не в структури. Тоест
+това е чисто въпрос на линкване, не на ABI.
+
+ath9k пази LED кода си под #ifdef CONFIG_MAC80211_LEDS, така че
+драйверът се компилира чисто без него; губи се само LED trigger-а на
+антената.
+
+--- a/drivers/net/wireless/ath/ath9k/Kconfig
++++ b/drivers/net/wireless/ath/ath9k/Kconfig
+@@ -174,7 +174,6 @@
+ config ATH9K_HTC
+ 	tristate "Atheros HTC based wireless cards support"
+ 	depends on USB && MAC80211
+-	select MAC80211_LEDS if LEDS_CLASS=y || LEDS_CLASS=MAC80211
+ 	select ATH9K_HW
+ 	select ATH9K_COMMON
+ 	help

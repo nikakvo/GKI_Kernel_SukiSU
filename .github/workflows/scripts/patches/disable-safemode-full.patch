@@ -1,0 +1,57 @@
+--- a/kernel/runtime/ksud.c	2026-07-21 15:04:47.584066494 +0000
++++ b/kernel/runtime/ksud.c	2026-07-21 15:04:47.590164084 +0000
+@@ -564,17 +564,9 @@
+     return 0;
+ }
+ 
+-static bool safe_mode_flag = false;
+-#define VOLUME_PRESS_THRESHOLD_COUNT 3
+-
+ bool ksu_is_safe_mode(void)
+ {
+-    // don't need to check again, userspace may call multiple times
+-    static bool already_checked = false;
+-    if (already_checked)
+-        return true;
+-
+-    // stop hook first!
++    // stop hook first! (kept for cleanup/perf, unrelated to the disabled check below)
+ #if defined(CONFIG_KSU_SUSFS) && defined(KSU_COMPAT_USE_STATIC_KEY)
+     if (static_key_enabled(&ksu_is_input_hook_enabled)) {
+         static_branch_disable(&ksu_is_input_hook_enabled);
+@@ -584,12 +576,9 @@
+     stop_input_hook();
+ #endif
+ 
+-    if (!safe_mode_flag)
+-        return false;
+-
+-    pr_info("volume keys pressed max times, safe mode detected!\n");
+-    already_checked = true;
+-    return true;
++    // Safe mode permanently disabled: never report safe mode to userspace,
++    // regardless of what the volume-key counter below did.
++    return false;
+ }
+ 
+ static void vol_detector_event(struct input_handle *handle, unsigned int type, unsigned int code, int value)
+@@ -615,17 +604,8 @@
+ 
+     pr_info("volume_pressed_count: vol_up: %d vol_down: %d\n", vol_up_cnt, vol_down_cnt);
+ 
+-    /*
+-	 * on upstream we call stop_input_hook() here but this is causing issues
+-	 * #1. unregistering an input handler inside the input handler is a bad meme
+-	 * #2. when I tried to defer unreg to a kthread, it also causes issues on some users? nfi.
+-	 * since unregging is done anyway on ksu_is_safe_mode() or on_post_fs_data() we just dont bother.
+-	 *
+-	 */
+-    if (vol_up_cnt >= VOLUME_PRESS_THRESHOLD_COUNT || vol_down_cnt >= VOLUME_PRESS_THRESHOLD_COUNT) {
+-        pr_info("volume keys pressed max times, safe mode detected!\n");
+-        safe_mode_flag = true;
+-    }
++    // Safe mode detection removed: counting is kept only for the log line
++    // above (harmless diagnostics); it no longer flips any state.
+ }
+ 
+ static int vol_detector_connect(struct input_handler *handler, struct input_dev *dev, const struct input_device_id *id)

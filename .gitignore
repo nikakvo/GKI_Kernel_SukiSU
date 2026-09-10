@@ -1,0 +1,15 @@
+# Python bytecode from running the build scripts locally
+__pycache__/
+*.py[cod]
+
+# Local build logs written by build-kernel.sh
+build-*.log
+
+# Never commit a build workspace or its artifacts
+gki-workspace/
+*.img
+*-AnyKernel3*.zip
+*.bak
+ath9k_htc_vermeer.zip
+ath9k-htc-vermeer/
+make-ath9k-module.sh

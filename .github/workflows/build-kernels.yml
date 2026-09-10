@@ -1,0 +1,497 @@
+name: Build Kernels
+
+permissions:
+  contents: write
+  actions: write
+
+on:
+  workflow_dispatch:
+    inputs:
+      kernelsu_version:
+        description: 'SukiSU Version'
+        required: true
+        type: choice
+        options:
+          - Stable
+          - Dev
+        default: Stable
+      kernelsu_commit:
+        description: 'Specify SukiSU commit hash (optional, leave empty to track the moving main branch, which can occasionally fail mid-refactor)'
+        required: false
+        type: string
+        default: 'v4.2.0'
+      susfs_commit:
+        description: 'Specify SUSFS commit hash or relative offset (e.g. HEAD~1)'
+        required: false
+        type: string
+        default: ''
+      custom_version:
+        description: 'Custom version name (optional)'
+        required: false
+        type: string
+        default: ''
+      use_zram:
+        description: 'Enable ZRAM (LZ4KD)'
+        required: true
+        type: boolean
+        default: true
+      use_kpm:
+        description: 'Enable KPM'
+        required: true
+        type: boolean
+        default: true
+      use_mglru:
+        description: 'Enable MGLRU (Multi-Gen LRU)'
+        required: true
+        type: boolean
+        default: true
+      use_psi:
+        description: 'Enable PSI (Pressure Stall Information)'
+        required: true
+        type: boolean
+        default: true
+      use_ntsync:
+        description: 'Enable NTSync (Winlator/Wine NT sync primitives)'
+        required: true
+        type: boolean
+        default: true
+      BBG:
+        description: 'Enable Baseband-guard'
+        required: true
+        type: boolean
+        default: true
+      blacklist_modules:
+        description: 'Comma-separated vendor module names to block from loading (CONFIG_DEBLOAT_VENDOR_MODULES). Leave empty to disable. Auto-disables outside normal boot (recovery/fastbootd).'
+        required: false
+        type: string
+        default: ''
+      DROIDSPACES:
+        description: 'Enable Droidspaces container-runtime support (namespaces for full Linux distros - see README) - android12/13/14 (5.10/5.15/6.1) only. Uncheck to build without it.'
+        required: true
+        type: boolean
+        default: true
+      enable_ksm:
+        description: 'Enable KSM (Kernel Samepage Merging)'
+        required: true
+        type: boolean
+        default: false
+      hide_stuff:
+        description: 'Apply 69_hide_stuff.patch (LineageOS/jit-zygote-cache path spoofing) - currently stale against susfs4ksu and fails the build; uncheck to skip it until ShirkNeko/SukiSU_patch fixes it'
+        required: true
+        type: boolean
+        default: true
+      extra_net:
+        description: 'Extra networking configs: IPv6 NAT, nftables, extra ipset types'
+        required: false
+        type: boolean
+        default: true
+      bbr_version:
+        description: 'BBR congestion control version'
+        required: true
+        type: choice
+        options:
+          - none
+          - bbr1
+          - bbr3
+        default: bbr3
+      lto_mode:
+        description: 'LTO mode (legacy build.sh branches only - android12/android13; ignored on Bazel/Kleaf branches, android14-6.1+, where the mode is fixed upstream). full = slower, single-threaded, RAM-heavy link step for marginally better perf/code-size.'
+        required: true
+        type: choice
+        options:
+          - thin
+          - full
+        default: thin
+      use_cache:
+        description: 'Use ccache (saves/restores build cache via a "Build Cache" GitHub Release - disable for a fully private run with nothing published, e.g. when make_release is also off)'
+        required: true
+        type: boolean
+        default: false
+      make_release:
+        description: 'Create GitHub Release'
+        required: true
+        type: boolean
+        default: true
+      release_title:
+        description: 'Release title (optional - e.g. "GKI Kernel SukiSU (40864) and SUSFS v2.2.0". Leave empty to use the default "GKI Kernel <tag>")'
+        required: false
+        type: string
+        default: ''
+      release_tag:
+        description: 'Release tag (optional, e.g. v4.1.3 to match the current SukiSU-Ultra Manager version). Leave empty to auto-use the current SUSFS version (e.g. v2.2.0) like before. Must be a valid git tag name (no spaces) and not already used by an existing release/tag in this repo.'
+        required: false
+        type: string
+        default: ''
+      send_telegram:
+        description: 'Send Telegram notification'
+        required: true
+        type: boolean
+        default: false
+
+env:
+  PYTHON_VERSION: '3.10'
+
+jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    env:
+      SCRIPTS_DIR: ./.github/workflows/scripts
+    outputs:
+      build_matrix: ${{ steps.generate.outputs.matrix }}
+      kernel_version: ${{ steps.generate.outputs.kernel_version }}
+      classified_matrix: ${{ steps.generate.outputs.classified_matrix }}
+      matrix_summary: ${{ steps.generate.outputs.matrix_summary }}
+      cache_key: ${{ steps.get_cache_key.outputs.cache_key }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+
+      - name: Get cache key
+        id: get_cache_key
+        run: echo "cache_key=${{ github.ref_name }}-ccache" >> $GITHUB_OUTPUT
+
+      - name: Generate build matrix
+        id: generate
+        run: python3 ${{ env.SCRIPTS_DIR }}/matrix_generator.py
+
+  build:
+    needs: prepare
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        config: ${{ fromJson(needs.prepare.outputs.build_matrix) }}
+    env:
+      SCRIPTS_DIR: ./.github/workflows/scripts
+    steps:
+      - name: Maximize build space
+        uses: AdityaGarg8/remove-unwanted-software@v5
+        with:
+          remove-dotnet: 'true'
+          remove-android: 'true'
+          remove-haskell: 'true'
+          remove-codeql: 'true'
+          remove-docker-images: 'true'
+          remove-large-packages: 'true'
+          remove-swapfile: 'true'
+          verbose: 'true'
+
+      - name: Checkout code
+        uses: actions/checkout@v6
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install dependencies
+        run: |
+          sudo apt update && sudo apt upgrade -y
+          sudo apt install -y ccache python3 git curl wget zip unzip xz-utils openssl pixz
+          pip install PyYAML
+
+      - name: Setup AVB signing key
+        env:
+          BOOT_SIGN_KEY: ${{ secrets.BOOT_SIGN_KEY }}
+        run: |
+          mkdir -p toolchain/linux-x86/bin
+          echo "$BOOT_SIGN_KEY" > toolchain/linux-x86/bin/testkey.pem
+          echo "BOOT_SIGN_KEY_PATH=$GITHUB_WORKSPACE/toolchain/linux-x86/bin/testkey.pem" >> $GITHUB_ENV
+
+      - name: Configure ccache
+        run: |
+          mkdir -p ~/.cache/bazel
+          mkdir -p ~/.ccache
+          ccache --version
+          ccache --max-size=2G
+          ccache --set-config=compression=true
+          echo "CCACHE_DIR=$HOME/.ccache" >> $GITHUB_ENV
+
+      - name: Restore ccache
+        id: restore-ccache
+        if: ${{ github.event.inputs.use_cache == 'true' }}
+        uses: ./.github/actions/cache-restore
+        with:
+          cache_path: /home/runner/.ccache
+          cache_key: ${{ github.ref_name }}-${{ matrix.config.android }}-${{ matrix.config.kernel }}-${{ matrix.config.sub_level }}
+          cache_bucket: ccache-cache
+
+      - name: Build kernel
+        run: |
+          cd ${{ env.SCRIPTS_DIR }}
+
+          ARGS="--android ${{ matrix.config.android }}"
+          ARGS="$ARGS --kernel ${{ matrix.config.kernel }}"
+          ARGS="$ARGS --sub-level ${{ matrix.config.sub_level }}"
+          ARGS="$ARGS --os-patch ${{ matrix.config.os_patch }}"
+          [ -n "${{ matrix.config.revision }}" ] && ARGS="$ARGS --revision ${{ matrix.config.revision }}"
+          [ -n "${{ matrix.config.kernel_tag }}" ] && ARGS="$ARGS --kernel-tag ${{ matrix.config.kernel_tag }}"
+          [ "${{ matrix.config.lts }}" = "true" ] && ARGS="$ARGS --lts"
+          ARGS="$ARGS --ksu-version ${{ github.event.inputs.kernelsu_version }}"
+          ARGS="$ARGS --no-release"
+
+          [ "${{ github.event.inputs.use_zram }}" = "true" ] && ARGS="$ARGS --zram"
+          [ "${{ github.event.inputs.use_kpm }}" = "false" ] && ARGS="$ARGS --no-kpm"
+          [ "${{ github.event.inputs.use_mglru }}" = "false" ] && ARGS="$ARGS --no-mglru"
+          [ "${{ github.event.inputs.use_psi }}" = "false" ] && ARGS="$ARGS --no-psi"
+          [ "${{ github.event.inputs.use_ntsync }}" = "false" ] && ARGS="$ARGS --no-ntsync"
+          [ "${{ github.event.inputs.BBG }}" = "true" ] && ARGS="$ARGS --bbg"
+          [ -n "${{ github.event.inputs.blacklist_modules }}" ] && ARGS="$ARGS --blacklist-modules \"${{ github.event.inputs.blacklist_modules }}\""
+          [ "${{ github.event.inputs.DROIDSPACES }}" = "true" ] && ARGS="$ARGS --droidspaces"
+          [ "${{ github.event.inputs.enable_ksm }}" = "true" ] && ARGS="$ARGS --ksm"
+          [ "${{ github.event.inputs.hide_stuff }}" = "false" ] && ARGS="$ARGS --no-hide-stuff"
+          [ "${{ github.event.inputs.extra_net }}" = "true" ] && ARGS="$ARGS --extra-net"
+
+          ARGS="$ARGS --bbr-version ${{ github.event.inputs.bbr_version }}"
+          ARGS="$ARGS --lto-mode ${{ github.event.inputs.lto_mode }}"
+
+          [ -z "${{ github.event.inputs.kernelsu_commit }}" ] || ARGS="$ARGS --ksu-commit=${{ github.event.inputs.kernelsu_commit }}"
+          [ -z "${{ github.event.inputs.susfs_commit }}" ] || ARGS="$ARGS --susfs-commit=${{ github.event.inputs.susfs_commit }}"
+          [ -z "${{ github.event.inputs.custom_version }}" ] || ARGS="$ARGS --custom-version=${{ github.event.inputs.custom_version }}"
+
+          python3 build.py $ARGS
+
+      - name: Save ccache
+        if: ${{ github.event.inputs.use_cache == 'true' }}
+        uses: ./.github/actions/cache-save
+        with:
+          cache_path: /home/runner/.ccache
+          cache_key: ${{ github.ref_name }}-${{ matrix.config.android }}-${{ matrix.config.kernel }}-${{ matrix.config.sub_level }}
+          cache_bucket: ccache-cache
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Prepare artifacts
+        id: prepare-artifacts
+        run: |
+          # Unique per-build key: plain android-kernel-sublevel collides
+          # between a regular respin and an LTS-merge respin that happen
+          # to share the same sub_level (e.g. a dash-style 206 AND a
+          # dot-style LTS 206 both exist upstream) - append "-lts" so
+          # every artifact bundle name AND every filename inside
+          # build-results/ stays unique, or the LTS build's files get
+          # silently dropped/overwritten when the release job merges
+          # same-named artifacts back together.
+          BUILD_KEY="${{ matrix.config.android }}-${{ matrix.config.kernel }}-${{ matrix.config.sub_level }}"
+          [ "${{ matrix.config.lts }}" = "true" ] && BUILD_KEY="${BUILD_KEY}-lts"
+          echo "build_key=$BUILD_KEY" >> $GITHUB_OUTPUT
+
+          mkdir -p artifacts
+          find /tmp/gki-build -name "*AnyKernel3*.zip" -type f -exec cp {} artifacts/ \;
+          find /tmp/gki-build -name "*-boot.img" -type f -exec cp {} artifacts/ \;
+          if [ -z "$(ls -A artifacts/)" ]; then
+            echo "No build artifacts found"
+            echo "artifacts_exist=false" >> $GITHUB_OUTPUT
+          else
+            echo "artifacts_exist=true" >> $GITHUB_OUTPUT
+            ls -la artifacts/
+            # Generate SHA256SUMS outside artifacts/ so it's not bundled
+            # into the manually-downloadable per-config zip - it's only
+            # needed for the release job's checksum aggregation below.
+            (cd artifacts && sha256sum *) > SHA256SUMS.txt
+          fi
+
+      - name: Upload artifacts
+        if: steps.prepare-artifacts.outputs.artifacts_exist == 'true'
+        uses: actions/upload-artifact@v7
+        with:
+          name: kernel-${{ steps.prepare-artifacts.outputs.build_key }}
+          path: artifacts/*
+
+      - name: Record build result
+        if: always()
+        run: |
+          mkdir -p build-results
+          BUILD_KEY="${{ steps.prepare-artifacts.outputs.build_key || format('{0}-{1}-{2}', matrix.config.android, matrix.config.kernel, matrix.config.sub_level) }}"
+          # Copy SHA256SUMS
+          if [ -f "SHA256SUMS.txt" ]; then
+            cp SHA256SUMS.txt "build-results/${BUILD_KEY}.txt"
+          fi
+          # Record build status
+          echo "${BUILD_KEY}:outcome=${{ job.status }}" >> "build-results/status-${BUILD_KEY}.txt"
+          # Copy per-build patch status (written by kernel_builder.py even
+          # on a failed build, best-effort) for the aggregated summary
+          # table in the release job.
+          PATCH_STATUS_SRC=$(find /tmp/gki-build -maxdepth 2 -name "PATCH_STATUS.json" | head -n1)
+          if [ -n "$PATCH_STATUS_SRC" ]; then
+            cp "$PATCH_STATUS_SRC" "build-results/${BUILD_KEY}.patches.json"
+          fi
+
+      - name: Upload build results
+        uses: actions/upload-artifact@v7
+        with:
+          name: build-results-${{ steps.prepare-artifacts.outputs.build_key || format('{0}-{1}-{2}', matrix.config.android, matrix.config.kernel, matrix.config.sub_level) }}
+          path: build-results/
+          retention-days: 1
+
+  release:
+    needs: [prepare, build]
+    # !cancelled() overrides GitHub Actions' default behavior of skipping
+    # this job entirely whenever any single matrix leg of the `build` job
+    # fails (fail-fast: false only keeps the other matrix builds running -
+    # it doesn't stop one failed leg from making the whole `build` job's
+    # conclusion "failure", which by default skips anything that needs
+    # it). We still want the release made from whatever succeeded, so:
+    # run unless the workflow itself was cancelled.
+    if: ${{ !cancelled() }}
+    # This job's first few steps (download artifacts, build summary,
+    # patch status table) always run regardless of make_release - only
+    # the actual release-creation steps further down are individually
+    # gated on `github.event.inputs.make_release == 'true'` (see their
+    # own `if:` conditions below) so the summary table still shows up
+    # in $GITHUB_STEP_SUMMARY even on a plain build-only run.
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      SCRIPTS_DIR: ./.github/workflows/scripts
+      WORKSPACE_ROOT: ${{ github.workspace }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v8
+        with:
+          path: all-artifacts
+          pattern: 'kernel-*'
+          merge-multiple: true
+
+      - name: Download build results
+        uses: actions/download-artifact@v8
+        with:
+          pattern: 'build-results-*'
+          path: build-results
+          merge-multiple: true
+
+      - name: Prepare build summary
+        id: prepare-summary
+        run: |
+          mkdir -p build-results
+          # Every build now writes its own status-<BUILD_KEY>.txt (a single-
+          # line file) instead of all builds appending to one shared
+          # status.txt - once artifact bundle names became unique per
+          # build (see "Prepare artifacts" above) it became possible for
+          # download-artifact's merge-multiple to actually fetch every
+          # bundle, which would otherwise make a single shared filename
+          # collide across bundles at merge time and silently drop all
+          # but one build's status line.
+          cat build-results/status-*.txt > build-results/status.txt 2>/dev/null || touch build-results/status.txt
+          echo "=== Build Summary ===" >> $GITHUB_STEP_SUMMARY
+          TOTAL=$(cat build-results/status.txt 2>/dev/null | wc -l || echo 0)
+          SUCCESS=$(grep ':outcome=success$' build-results/status.txt 2>/dev/null | wc -l || echo 0)
+          FAILED=$(grep ':outcome=failure$' build-results/status.txt 2>/dev/null | wc -l || echo 0)
+          echo "total=$TOTAL" >> $GITHUB_OUTPUT
+          echo "success=$SUCCESS" >> $GITHUB_OUTPUT
+          echo "failed=$FAILED" >> $GITHUB_OUTPUT
+          echo "| Total | Success | Failed |" >> $GITHUB_STEP_SUMMARY
+          echo "|-------|---------|--------|" >> $GITHUB_STEP_SUMMARY
+          echo "| $TOTAL | $SUCCESS | $FAILED |" >> $GITHUB_STEP_SUMMARY
+          echo "=== Status ==="
+          cat build-results/status.txt 2>/dev/null || echo "No status file"
+
+      - name: Patch status summary
+        run: python3 ${{ env.SCRIPTS_DIR }}/patch_summary.py build-results "$GITHUB_STEP_SUMMARY"
+
+      - name: Prepare release files
+        id: prepare-release-files
+        if: steps.prepare-summary.outputs.success != '0' && github.event.inputs.make_release == 'true'
+        run: |
+          mkdir -p release-files
+          
+          python3 ${{ env.SCRIPTS_DIR }}/extract_artifacts.py all-artifacts release-files --build-results build-results
+          
+          ls -la release-files/
+
+      - name: Generate release body
+        if: steps.prepare-summary.outputs.success != '0' && github.event.inputs.make_release == 'true'
+        run: |
+          python3 ${{ env.SCRIPTS_DIR }}/release_generator.py ${{ env.WORKSPACE_ROOT }}/release-files/RELEASE_BODY.md --lto-mode ${{ github.event.inputs.lto_mode }}
+          echo "=== Release Body ==="
+          cat release-files/RELEASE_BODY.md
+
+      - name: Resolve release tag
+        if: steps.prepare-summary.outputs.success != '0' && github.event.inputs.make_release == 'true'
+        id: resolve-release-tag
+        run: |
+          # Default: auto-derived from SUSFS's own version (e.g. v2.2.0),
+          # same as always. release_tag lets you override it explicitly
+          # (e.g. to match the current SukiSU-Ultra Manager release tag
+          # instead) without touching any code.
+          TAG="${{ github.event.inputs.release_tag }}"
+          if [ -z "$TAG" ]; then
+            TAG="${{ needs.prepare.outputs.kernel_version }}"
+            echo "Using auto-derived tag (SUSFS version): $TAG"
+          else
+            echo "Using manually specified release_tag: $TAG"
+          fi
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+
+      - name: Create release
+        if: steps.prepare-summary.outputs.success != '0' && github.event.inputs.make_release == 'true'
+        uses: softprops/action-gh-release@v3
+        id: create_release
+        with:
+          tag_name: ${{ steps.resolve-release-tag.outputs.tag }}
+          name: ${{ github.event.inputs.release_title != '' && github.event.inputs.release_title || format('GKI Kernel {0}', steps.resolve-release-tag.outputs.tag) }}
+          draft: false
+          generate_release_notes: false
+          files: |
+            release-files/*
+          body_path: release-files/RELEASE_BODY.md
+
+      - name: Get release URL
+        if: steps.prepare-summary.outputs.success != '0' && github.event.inputs.make_release == 'true'
+        id: get-release-url
+        run: |
+          RELEASE_URL="https://github.com/${{ github.repository }}/releases/tag/${{ steps.resolve-release-tag.outputs.tag }}"
+          echo "release_url=$RELEASE_URL" >> $GITHUB_OUTPUT
+          echo "Release URL: $RELEASE_URL"
+
+      - name: Send Telegram Notification
+        if: ${{ github.event.inputs.send_telegram == 'true' && github.event.inputs.make_release == 'true' }}
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          TELEGRAM_MESSAGE_THREAD_ID: ${{ secrets.TELEGRAM_MESSAGE_THREAD_ID }}
+          SUCCESS: ${{ steps.prepare-summary.outputs.success }}
+          FAILED: ${{ steps.prepare-summary.outputs.failed }}
+        run: |
+          set +e
+          # A notification failure (missing secrets, Telegram API hiccup,
+          # etc.) must never mark this job as failed - the release itself
+          # already succeeded by this point, which is what actually matters.
+          if [ -z "$TELEGRAM_BOT_TOKEN" ] || [ -z "$TELEGRAM_CHAT_ID" ]; then
+            echo "::warning::TELEGRAM_BOT_TOKEN or TELEGRAM_CHAT_ID secret not configured - skipping Telegram notification (the release itself was still created successfully)"
+            exit 0
+          fi
+
+          # Check if there is any successful build
+          if [ "$SUCCESS" -gt 0 ]; then
+            python3 ${{ env.SCRIPTS_DIR }}/telegram_notify.py release \
+              "${{ steps.resolve-release-tag.outputs.tag }}" \
+              "${{ steps.get-release-url.outputs.release_url }}" \
+              "${{ env.WORKSPACE_ROOT }}/release-files/RELEASE_BODY.md" \
+              "" \
+              "" \
+              "$SUCCESS" \
+              "$FAILED"
+          else
+            python3 ${{ env.SCRIPTS_DIR }}/telegram_notify.py release \
+              "${{ steps.resolve-release-tag.outputs.tag }}" \
+              "${{ steps.get-release-url.outputs.release_url }}" \
+              "" \
+              "" \
+              "" \
+              "0" \
+              "${{ steps.prepare-summary.outputs.total }}"
+          fi
+
+          if [ $? -ne 0 ]; then
+            echo "::warning::Telegram notification failed to send - the release itself was still created successfully"
+          fi
+          exit 0

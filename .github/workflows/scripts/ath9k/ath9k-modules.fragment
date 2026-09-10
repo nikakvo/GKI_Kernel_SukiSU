@@ -1,0 +1,32 @@
+# ath9k_htc за GKI android13-5.15 — фрагмент за модулен билд
+#
+# ВАЖНО: всичко тук е =m. Нищо не влиза в Image-а. Проверено:
+# единственото място в core мрежовия код, което гледа CONFIG_CFG80211, е
+# net/core/net-sysfs.c и то е под
+#   #if IS_ENABLED(CONFIG_WIRELESS_EXT) || IS_ENABLED(CONFIG_CFG80211)
+# а CONFIG_WIRELESS_EXT=y вече е включен -> блокът вече е активен, vmlinux
+# не се променя. net/core/{dev,rtnetlink,dev_ioctl}.c и net/socket.c: 0
+# референции. include/linux/netdevice.h пази ieee80211_ptr безусловно
+# (Google е махнал IS_ENABLED guard-а заради KMI).
+#
+# Стойностите по-долу НЕ са по вкус — всяка е сверена срещу вендорските
+# /vendor/lib/modules/{cfg80211,mac80211}.ko от устройството, защото
+# разминаване в тях променя layout-а на експортираните структури и
+# следователно CRC-тата.
+
+CONFIG_CFG80211=m
+# CONFIG_CFG80211_WEXT is not set
+CONFIG_NL80211_TESTMODE=y
+
+CONFIG_MAC80211=m
+# CONFIG_MAC80211_DEBUGFS is not set
+# CONFIG_MAC80211_MESH is not set
+# CONFIG_MAC80211_LEDS is not set
+
+CONFIG_WLAN=y
+CONFIG_WLAN_VENDOR_ATH=y
+CONFIG_ATH_COMMON=m
+CONFIG_ATH9K_HW=m
+CONFIG_ATH9K_COMMON=m
+CONFIG_ATH9K_HTC=m
+# CONFIG_ATH9K_HTC_DEBUGFS is not set

@@ -1,0 +1,73 @@
+name: Update Kernel Matrix
+
+permissions:
+  contents: write
+
+on:
+  workflow_dispatch:
+    inputs:
+      months:
+        description: 'Lookback window in months'
+        required: false
+        type: string
+        default: '24'
+
+env:
+  PYTHON_VERSION: '3.10'
+  CONFIG_DIR: ./.github/workflows/config
+
+jobs:
+  update-matrix:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+        with:
+          token: ${{ secrets.WORKFLOW_PAT }}
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Run update_matrix.py
+        run: |
+          cd ${{ env.CONFIG_DIR }}
+          MONTHS="${{ github.event.inputs.months }}"
+          [ -z "$MONTHS" ] && MONTHS=24
+          python3 update_matrix.py --months "$MONTHS" | tee update_output.txt
+
+      - name: Check whether matrix.json actually changed
+        id: check
+        run: |
+          if git diff --quiet -- ${{ env.CONFIG_DIR }}/matrix.json; then
+            echo "changed=false" >> $GITHUB_OUTPUT
+          else
+            echo "changed=true" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Write job summary
+        run: |
+          echo "## Matrix Update" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          cat ${{ env.CONFIG_DIR }}/update_output.txt >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          if [ "${{ steps.check.outputs.changed }}" = "true" ]; then
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "matrix.json was updated and committed." >> $GITHUB_STEP_SUMMARY
+          else
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "No changes - matrix.json was already up to date." >> $GITHUB_STEP_SUMMARY
+          fi
+
+      - name: Commit and push changes
+        if: steps.check.outputs.changed == 'true'
+        run: |
+          CHANGE_COUNT=$(grep -cE '^  [+~] ' ${{ env.CONFIG_DIR }}/update_output.txt || true)
+          [ -z "$CHANGE_COUNT" ] && CHANGE_COUNT=0
+
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add ${{ env.CONFIG_DIR }}/matrix.json
+          git commit -m "Auto-update matrix.json ($CHANGE_COUNT change(s))"
+          git push

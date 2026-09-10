@@ -1,0 +1,6 @@
+# Patch files must always use LF line endings - CRLF corrupts them and
+# breaks `patch` (typically fails right at EOF with "malformed patch" or
+# "unexpectedly ends in middle of line"). This overrides any
+# core.autocrlf=true setting (the Git for Windows default) for these
+# specific files, regardless of which platform clones/checks out the repo.
+*.patch text eol=lf

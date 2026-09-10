@@ -1,0 +1,344 @@
+name: Kernel Build
+
+permissions:
+  contents: write
+  actions: write
+
+on:
+  workflow_dispatch:
+    inputs:
+      android_version:
+        description: 'Android Version'
+        required: true
+        type: choice
+        options:
+          - android12
+          - android13
+          - android14
+          - android15
+        default: android13
+      kernel_version:
+        description: 'Kernel Version'
+        required: true
+        type: choice
+        options:
+          - "5.10"
+          - "5.15"
+          - "6.1"
+          - "6.6"
+        default: "5.15"
+      sub_level:
+        description: 'Sub Level Version'
+        required: true
+        type: string
+        default: '211'
+      os_patch_level:
+        description: 'OS Patch Level'
+        required: true
+        type: string
+        default: '2026-06'
+      revision:
+        description: 'Android 12 Revision (optional)'
+        required: false
+        type: string
+        default: ''
+      kernel_tag:
+        description: 'Kernel tag override (optional). Auto-resolved from matrix.json for this sub_level/os_patch if already listed there - only fill this in manually for a sub_level/os_patch NOT yet in matrix.json (e.g. android13-5.15.209_r00), otherwise leave empty.'
+        required: false
+        type: string
+        default: ''
+      kernelsu_version:
+        description: 'SukiSU Version'
+        required: true
+        type: choice
+        options:
+          - Stable
+          - Dev
+        default: Stable
+      kernelsu_commit:
+        description: 'Specify KernelSU commit hash (optional - leave empty to track the moving main branch, which can occasionally fail mid-refactor)'
+        required: false
+        type: string
+        default: 'v4.2.0'
+      susfs_commit:
+        description: 'Specify SUSFS commit hash (optional)'
+        required: false
+        type: string
+        default: ''
+      custom_version:
+        description: 'Custom version name (optional)'
+        required: false
+        type: string
+        default: ''
+      use_zram:
+        description: 'Enable ZRAM (LZ4KD)'
+        required: true
+        type: boolean
+        default: true
+      use_kpm:
+        description: 'Enable KPM'
+        required: true
+        type: boolean
+        default: true
+      use_mglru:
+        description: 'Enable MGLRU (Multi-Gen LRU)'
+        required: true
+        type: boolean
+        default: true
+      use_psi:
+        description: 'Enable PSI (Pressure Stall Information)'
+        required: true
+        type: boolean
+        default: true
+      use_ntsync:
+        description: 'Enable NTSync (Winlator/Wine NT sync primitives)'
+        required: true
+        type: boolean
+        default: true
+      BBG:
+        description: 'Enable Baseband-guard'
+        required: true
+        type: boolean
+        default: true
+      blacklist_modules:
+        description: 'Comma-separated vendor module names to block from loading (CONFIG_DEBLOAT_VENDOR_MODULES). Leave empty to disable. Auto-disables outside normal boot (recovery/fastbootd).'
+        required: false
+        type: string
+        default: ''
+      DROIDSPACES:
+        description: 'Enable Droidspaces container-runtime support (namespaces for full Linux distros - see README) - android12/13/14 (5.10/5.15/6.1) only. Uncheck to build without it.'
+        required: true
+        type: boolean
+        default: true
+      supp_op:
+        description: 'Enable OnePlus 8E support'
+        required: true
+        type: boolean
+        default: false
+      enable_ksm:
+        description: 'Enable KSM (Kernel Samepage Merging)'
+        required: true
+        type: boolean
+        default: false
+      hide_stuff:
+        description: 'Apply 69_hide_stuff.patch (LineageOS/jit-zygote-cache path spoofing) - currently stale against susfs4ksu and fails the build; uncheck to skip it until ShirkNeko/SukiSU_patch fixes it'
+        required: true
+        type: boolean
+        default: true
+      extra_net:
+        description: 'Extra networking configs: IPv6 NAT, nftables, extra ipset types'
+        required: false
+        type: boolean
+        default: true
+      bbr_version:
+        description: 'BBR congestion control version (bbr3: android12/13/14 only - see README)'
+        required: true
+        type: choice
+        options:
+          - none
+          - bbr1
+          - bbr3
+        default: bbr3
+      lto_mode:
+        description: 'LTO mode (legacy build.sh branches only - android12/android13; ignored on Bazel/Kleaf branches, android14-6.1+, where the mode is fixed upstream). full = slower, single-threaded, RAM-heavy link step for marginally better perf/code-size.'
+        required: true
+        type: choice
+        options:
+          - thin
+          - full
+        default: thin
+      make_release:
+        description: 'Create GitHub Release'
+        required: true
+        type: boolean
+        default: false
+      send_telegram:
+        description: 'Send Telegram notification'
+        required: true
+        type: boolean
+        default: false
+
+env:
+  PYTHON_VERSION: '3.10'
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Maximize build space
+        uses: AdityaGarg8/remove-unwanted-software@v5
+        with:
+          remove-dotnet: 'true'
+          remove-android: 'true'
+          remove-haskell: 'true'
+          remove-codeql: 'true'
+          remove-docker-images: 'true'
+          remove-large-packages: 'true'
+          remove-swapfile: 'true'
+          verbose: 'true'
+
+      - name: Checkout code
+        uses: actions/checkout@v6
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install dependencies
+        run: |
+          sudo apt update && sudo apt upgrade -y
+          sudo apt install -y ccache python3 git curl wget zip unzip
+          pip install PyYAML
+
+      - name: Setup AVB signing key
+        env:
+          BOOT_SIGN_KEY: ${{ secrets.BOOT_SIGN_KEY }}
+        run: |
+          mkdir -p toolchain/linux-x86/bin
+          echo "$BOOT_SIGN_KEY" > toolchain/linux-x86/bin/testkey.pem
+          echo "BOOT_SIGN_KEY_PATH=$GITHUB_WORKSPACE/toolchain/linux-x86/bin/testkey.pem" >> $GITHUB_ENV
+
+      - name: Configure ccache
+        run: |
+          mkdir -p ~/.cache/bazel
+          ccache --version
+          ccache --max-size=2G
+          ccache --set-config=compression=true
+          echo "CCACHE_DIR=$HOME/.ccache" >> $GITHUB_ENV
+
+      - name: Restore ccache
+        uses: actions/cache@v5
+        with:
+          path: ~/.ccache
+          key: ${{ github.event.inputs.android_version }}-${{ github.event.inputs.kernel_version }}-${{ github.event.inputs.sub_level }}-ccache-${{ github.sha }}
+          restore-keys: |
+            ${{ github.event.inputs.android_version }}-${{ github.event.inputs.kernel_version }}-${{ github.event.inputs.sub_level }}-ccache-
+
+      - name: Resolve kernel tag
+        id: resolve-tag
+        run: |
+          MANUAL_TAG="${{ github.event.inputs.kernel_tag }}"
+          if [ -n "$MANUAL_TAG" ]; then
+            RESOLVED="$MANUAL_TAG"
+            SRC="manual input"
+          else
+            RESOLVED=$(jq -r --arg key "${{ github.event.inputs.android_version }}-${{ github.event.inputs.kernel_version }}" \
+                           --arg sub "${{ github.event.inputs.sub_level }}" \
+                           --arg patch "${{ github.event.inputs.os_patch_level }}" \
+              '.[$key][]? | select((.sub_level|tostring) == $sub and .os_patch_level == $patch) | .kernel_tag // empty' \
+              .github/workflows/config/matrix.json 2>/dev/null | head -n1)
+            SRC="matrix.json"
+          fi
+
+          if [ -n "$RESOLVED" ]; then
+            echo "Resolved kernel_tag ($SRC): $RESOLVED"
+          else
+            echo "::warning::No kernel_tag resolved (not found in matrix.json for this sub_level/os_patch, and none entered manually). The build will track the moving branch HEAD instead of pinning an exact respin - the artifact filename may omit the revision suffix, AND the actually compiled kernel source may not correspond to the sub_level you entered. If this sub_level/os_patch is not yet in matrix.json, fill in the 'Kernel Tag' input manually with the exact upstream tag (e.g. android13-5.15.209_r00)."
+          fi
+
+          echo "kernel_tag=$RESOLVED" >> "$GITHUB_OUTPUT"
+
+          # Purely cosmetic: if this sub_level/os_patch is already in
+          # matrix.json and flagged "lts": true (an LTS-merge respin tag,
+          # e.g. android13-5.15.209_r00, rather than a regular date-based
+          # one), carry that through so the output filename gets a "-lts"
+          # marker - otherwise users downloading the artifact have no way
+          # to tell it apart from a normal respin at a glance.
+          IS_LTS=$(jq -r --arg key "${{ github.event.inputs.android_version }}-${{ github.event.inputs.kernel_version }}" \
+                         --arg sub "${{ github.event.inputs.sub_level }}" \
+                         --arg patch "${{ github.event.inputs.os_patch_level }}" \
+            '.[$key][]? | select((.sub_level|tostring) == $sub and .os_patch_level == $patch) | .lts // false' \
+            .github/workflows/config/matrix.json 2>/dev/null | head -n1)
+          echo "is_lts=$IS_LTS" >> "$GITHUB_OUTPUT"
+
+      - name: Build kernel
+        run: |
+          cd ./.github/workflows/scripts
+
+          ARGS="--android ${{ github.event.inputs.android_version }}"
+          ARGS="$ARGS --kernel ${{ github.event.inputs.kernel_version }}"
+          ARGS="$ARGS --sub-level ${{ github.event.inputs.sub_level }}"
+          ARGS="$ARGS --os-patch ${{ github.event.inputs.os_patch_level }}"
+          [ -n "${{ github.event.inputs.revision }}" ] && ARGS="$ARGS --revision ${{ github.event.inputs.revision }}"
+          [ -n "${{ steps.resolve-tag.outputs.kernel_tag }}" ] && ARGS="$ARGS --kernel-tag ${{ steps.resolve-tag.outputs.kernel_tag }}"
+          [ "${{ steps.resolve-tag.outputs.is_lts }}" = "true" ] && ARGS="$ARGS --lts"
+          ARGS="$ARGS --ksu-version ${{ github.event.inputs.kernelsu_version }}"
+
+          [ "${{ github.event.inputs.use_zram }}" = "true" ] && ARGS="$ARGS --zram"
+          [ "${{ github.event.inputs.use_kpm }}" = "false" ] && ARGS="$ARGS --no-kpm"
+          [ "${{ github.event.inputs.use_mglru }}" = "false" ] && ARGS="$ARGS --no-mglru"
+          [ "${{ github.event.inputs.use_psi }}" = "false" ] && ARGS="$ARGS --no-psi"
+          [ "${{ github.event.inputs.use_ntsync }}" = "false" ] && ARGS="$ARGS --no-ntsync"
+          [ "${{ github.event.inputs.BBG }}" = "true" ] && ARGS="$ARGS --bbg"
+          [ -n "${{ github.event.inputs.blacklist_modules }}" ] && ARGS="$ARGS --blacklist-modules \"${{ github.event.inputs.blacklist_modules }}\""
+          [ "${{ github.event.inputs.DROIDSPACES }}" = "true" ] && ARGS="$ARGS --droidspaces"
+          [ "${{ github.event.inputs.supp_op }}" = "true" ] && ARGS="$ARGS --op8e"
+          [ "${{ github.event.inputs.enable_ksm }}" = "true" ] && ARGS="$ARGS --ksm"
+          [ "${{ github.event.inputs.hide_stuff }}" = "false" ] && ARGS="$ARGS --no-hide-stuff"
+          [ "${{ github.event.inputs.extra_net }}" = "true" ] && ARGS="$ARGS --extra-net"
+          ARGS="$ARGS --bbr-version ${{ github.event.inputs.bbr_version }}"
+          ARGS="$ARGS --lto-mode ${{ github.event.inputs.lto_mode }}"
+          [ -z "${{ github.event.inputs.kernelsu_commit }}" ] || ARGS="$ARGS --ksu-commit=${{ github.event.inputs.kernelsu_commit }}"
+          [ -z "${{ github.event.inputs.susfs_commit }}" ] || ARGS="$ARGS --susfs-commit=${{ github.event.inputs.susfs_commit }}"
+          [ -z "${{ github.event.inputs.custom_version }}" ] || ARGS="$ARGS --custom-version=${{ github.event.inputs.custom_version }}"
+          [ "${{ github.event.inputs.make_release }}" = "true" ] || ARGS="$ARGS --no-release"
+
+          python3 build.py $ARGS
+
+      - name: Prepare artifacts
+        run: |
+          mkdir -p artifacts
+          find /tmp/gki-build -name "*AnyKernel3*.zip" -type f -exec cp {} artifacts/ \;
+          find /tmp/gki-build -name "*-boot.img" -type f -exec cp {} artifacts/ \;
+
+      - name: Patch status summary
+        run: |
+          mkdir -p build-results
+          PATCH_STATUS_SRC=$(find /tmp/gki-build -maxdepth 2 -name "PATCH_STATUS.json" | head -n1)
+          if [ -n "$PATCH_STATUS_SRC" ]; then
+            cp "$PATCH_STATUS_SRC" "build-results/${{ github.event.inputs.android_version }}-${{ github.event.inputs.kernel_version }}-${{ github.event.inputs.sub_level }}.patches.json"
+          fi
+          cd ./.github/workflows/scripts
+          python3 patch_summary.py ../../../build-results "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v7
+        with:
+          name: kernel-${{ github.event.inputs.android_version }}-${{ github.event.inputs.kernel_version }}-${{ github.event.inputs.sub_level }}
+          path: artifacts/*
+
+      - name: Generate checksums
+        run: |
+          echo "=== Creating checksums ==="
+          sha256sum artifacts/* > SHA256SUMS.txt
+          cat SHA256SUMS.txt
+
+      - name: Send Telegram Notification
+        if: ${{ github.event.inputs.send_telegram == 'true' && success() }}
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          TELEGRAM_MESSAGE_THREAD_ID: ${{ secrets.TELEGRAM_MESSAGE_THREAD_ID }}
+        run: |
+          set +e
+          # A notification failure must never mark this job as failed -
+          # the kernel build itself already succeeded by this point.
+          if [ -z "$TELEGRAM_BOT_TOKEN" ] || [ -z "$TELEGRAM_CHAT_ID" ]; then
+            echo "::warning::TELEGRAM_BOT_TOKEN or TELEGRAM_CHAT_ID secret not configured - skipping Telegram notification (the kernel build itself still succeeded)"
+            exit 0
+          fi
+          cd ./.github/workflows/scripts
+          python3 telegram_notify.py single \
+            "${{ github.event.inputs.android_version }}" \
+            "${{ github.event.inputs.kernel_version }}" \
+            "${{ github.event.inputs.sub_level }}" \
+            "${{ github.event.inputs.os_patch_level }}" \
+            "${{ github.event.inputs.kernelsu_version }}" \
+            "${{ github.event.inputs.use_zram }}" \
+            "${{ github.event.inputs.use_kpm }}" \
+            "../../SHA256SUMS.txt"
+          if [ $? -ne 0 ]; then
+            echo "::warning::Telegram notification failed to send - the kernel build itself still succeeded"
+          fi
+          exit 0
