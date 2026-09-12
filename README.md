@@ -137,7 +137,7 @@ Active if it shows `CONFIG_LTO_CLANG_FULL=y` (release) or `CONFIG_LTO_CLANG_THIN
 
 ### Containers & compatibility
 
-**[Droidspaces](https://github.com/ravindu644/Droidspaces-OSS)** *(android12/13/14 only, `--droidspaces`)* — real Linux namespace isolation (PID/IPC/Mount/User) at the kernel level: run a full Linux distro in a genuine container with its own init system (systemd, OpenRC), not just a chroot. Managed via the [Droidspaces app](https://github.com/ravindu644/Droidspaces-OSS). See [Droidspaces details](#droidspaces-details) below.
+**[Droidspaces]** — real Linux namespace isolation (PID/IPC/Mount/User) at the kernel level: run a full Linux distro in a genuine container with its own init system (systemd, OpenRC), not just a chroot. Managed via the [Droidspaces app](https://github.com/ravindu644/Droidspaces-OSS). See [Droidspaces details](#droidspaces-details) below.
 ```bash
 su -c "zcat /proc/config.gz | grep -E 'CONFIG_SYSVIPC|CONFIG_POSIX_MQUEUE|CONFIG_IPC_NS|CONFIG_PID_NS|CONFIG_USER_NS|CONFIG_DEVTMPFS'"
 ```
