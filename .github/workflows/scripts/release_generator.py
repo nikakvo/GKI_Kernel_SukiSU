@@ -43,7 +43,6 @@ class ReleaseGenerator:
 
 - SUSFS v2.3.0
 - KPM Support (Kernel Patch Module)
-- Manual Syscall Hooks
 - Magic Mount Support
 - BBR v3 Support
 - BBG (Baseband-guard) Support
