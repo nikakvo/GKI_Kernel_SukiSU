@@ -385,11 +385,6 @@ Reboot to the bootloader (`adb reboot bootloader`, or Power + Volume Down), then
 fastboot flash boot_ab android13-5.15.211-2026-06-lto-full-r00-lts-boot.img
 ```
 
-**Permanent, active slot only:**
-```bash
-fastboot flash boot android13-5.15.211-2026-06-lto-full-r00-lts-boot.img
-```
-
 **Try it first, without writing anything** (loads the image once into RAM; a normal reboot goes back to your existing kernel):
 ```bash
 fastboot boot android13-5.15.211-2026-06-lto-full-r00-lts-boot.img
@@ -397,7 +392,7 @@ fastboot boot android13-5.15.211-2026-06-lto-full-r00-lts-boot.img
 
 > **Tip:** instead of typing the long filename, type `fastboot flash boot_ab ` (with the trailing space) and **drag-and-drop the `.img` file** into the terminal — it fills in the full path for you.
 >
-> **Note on "temporary":** only `fastboot boot` (no `flash`) is truly temporary — nothing is written, so a reboot reverts. `fastboot flash boot` *does* write to the active slot's boot partition; it's "reversible" only in the sense that you can flash your backup back (or switch slots with `fastboot set_active other`). If `fastboot boot` just hangs on this device, use the single-slot flash + a backup instead.
+> **`fastboot boot` vs `fastboot flash`:** `fastboot boot` (no `flash`) is truly temporary — nothing is written, so a normal reboot goes back to your old kernel. Use it to test before committing. `fastboot flash boot_ab` actually writes the kernel to both slots. If `fastboot boot` just hangs on this device, flash with `flash boot_ab` instead (keep your backup boot.img handy either way).
 
 ### Method 2 — AnyKernel3 (no PC)
 
@@ -420,7 +415,12 @@ Reboot when done.
 
 The **kernel side** of SUSFS is already baked into this build (patched in from [`ShirkNeko/susfs4ksu`](https://github.com/ShirkNeko/susfs4ksu), per GKI branch) — you don't install anything for that part.
 
-The **userspace side** (actually configuring what gets hidden) is handled through SukiSU-Ultra. This repo does **not** ship or require a separate SUSFS module — how you drive SUSFS depends on your manager setup. If you use a standalone SUSFS module instead, install it the same way as any other root module.
+For **full SUSFS support** you also need the **userspace module**, which actually drives the hiding (mount cleanup, path spoofing, etc.). Flash [**sidex15/susfs4ksu-module**](https://github.com/sidex15/susfs4ksu-module) in the SukiSU-Ultra manager like any other root module:
+
+- **Release build:** grab the latest zip from the module's [Releases](https://github.com/sidex15/susfs4ksu-module/releases).
+- **Latest build:** or the freshest artifact from its [Actions](https://github.com/sidex15/susfs4ksu-module/actions).
+
+Flash it, reboot, and configure the hiding from the SUSFS module / manager.
 
 ---
 
