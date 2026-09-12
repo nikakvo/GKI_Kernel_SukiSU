@@ -55,8 +55,6 @@ su -c "cat /proc/kallsyms | grep sukisu_kpm_version"
 ```
 Active if `sukisu_kpm_version` is listed.
 
-**Manual Syscall Hooks** — low-level syscall interception for root management and detection evasion, finer-grained than standard hooking.
-
 **Magic Mount** — overlay-based mounting that lets root modules modify the filesystem without touching the underlying partitions, improving compatibility and reducing detection surface.
 
 **Safe Mode Removal** — volume-key safe-mode detection permanently patched out (built by default; opt out by omitting `--disable-safemode`). Most users rely on [YABP](https://github.com/Magisk-Modules-Repo/YetAnotherBootloopProtector) instead.
@@ -166,6 +164,8 @@ su -c "dmesg | grep -c baseband_guard"
 Active if `CONFIG_BBG=y` is shown and the dmesg count is non-zero.
 
 **Ptrace Leak Fix (kernels < 5.16)** — backports the upstream 5.16 hardening fix that closes a `ptrace_message` race (a child's PID briefly visible to other readers before the tracer is notified, or stale after detach). Applied on 5.10/5.15; already upstream on 6.1+. No `/proc` flag to check — it's an internal timing fix, not a toggle.
+
+**Unicode Fix** — backports a fix to the kernel's UTF-8 normalization subsystem (`fs/unicode/utf8-norm.c`, used by case-insensitive f2fs/ext4 folders). The upstream bug advanced the decode cursor *before* checking whether a decomposition was empty (e.g. a zero-width character), so a crafted filename could make case-insensitive path comparisons behave inconsistently — including the path checks used for root-hiding, hence the "bypass". A plain upstream-kernel fix (not KSU/SUSFS-specific). No `/proc` flag to check — it's an internal correctness fix, not a toggle.
 
 ### External hardware
 
@@ -362,9 +362,65 @@ Tracked families: `android12-5.10`, `android13-5.15`, `android14-6.1`, `android1
 
 Each release attaches:
 
-1. **AnyKernel3.zip** — ready to flash with a tool like [HorizonKernelFlasher](https://github.com/libxzr/HorizonKernelFlasher/releases).
-2. **boot.img** — flash via `fastboot flash boot_ab <filename>`. Every image is AVB-signed (see [AVB Signing](#avb-signing)).
+1. **boot.img** — the ready-made boot image (`android13-5.15.211-2026-06-lto-full-r00-lts-boot.img`). Flash over `fastboot`. AVB-signed (see [AVB Signing](#avb-signing)).
+2. **AnyKernel3.zip** — the same kernel packaged for flashing from recovery or a kernel-flasher app, without a PC.
 3. **ath9k_htc_vermeer.zip** — companion module for the ath9k adapter. Only needed with a TL-WN722N v1.
+
+Pick **one** of boot.img or AnyKernel3 — they install the same kernel two different ways.
+
+---
+
+## Installation
+
+> **This is a SukiSU-Ultra kernel.** Root is managed by the **[SukiSU-Ultra](https://github.com/SukiSU-Ultra/SukiSU-Ultra) manager app** — install it (or update to it) so you get a root manager after flashing. See the [SUSFS notes](#susfs-userspace) at the end.
+>
+> **Always keep your current, working `boot.img` backed up before flashing anything.** If a flash goes wrong, see [Emergency Recovery](#emergency-recovery).
+
+### Method 1 — boot.img via fastboot (PC)
+
+Reboot to the bootloader (`adb reboot bootloader`, or Power + Volume Down), then pick one:
+
+**Permanent, both slots** (recommended for daily use):
+```bash
+fastboot flash boot_ab android13-5.15.211-2026-06-lto-full-r00-lts-boot.img
+```
+
+**Permanent, active slot only:**
+```bash
+fastboot flash boot android13-5.15.211-2026-06-lto-full-r00-lts-boot.img
+```
+
+**Try it first, without writing anything** (loads the image once into RAM; a normal reboot goes back to your existing kernel):
+```bash
+fastboot boot android13-5.15.211-2026-06-lto-full-r00-lts-boot.img
+```
+
+> **Tip:** instead of typing the long filename, type `fastboot flash boot_ab ` (with the trailing space) and **drag-and-drop the `.img` file** into the terminal — it fills in the full path for you.
+>
+> **Note on "temporary":** only `fastboot boot` (no `flash`) is truly temporary — nothing is written, so a reboot reverts. `fastboot flash boot` *does* write to the active slot's boot partition; it's "reversible" only in the sense that you can flash your backup back (or switch slots with `fastboot set_active other`). If `fastboot boot` just hangs on this device, use the single-slot flash + a backup instead.
+
+### Method 2 — AnyKernel3 (no PC)
+
+Flash `AnyKernel3.zip` like any other flashable zip:
+
+- **Custom recovery** (TWRP/OrangeFox) — *Install* → pick the zip → swipe.
+- **[HorizonKernelFlasher](https://github.com/libxzr/HorizonKernelFlasher/releases)** or another kernel-flasher app — open the app, select the zip, flash.
+- **SukiSU-Ultra manager** — if your current manager supports flashing AnyKernel zips, you can install it from there directly.
+
+Reboot when done.
+
+### After flashing
+
+1. Open the **SukiSU-Ultra manager** — it should show the kernel as rooted.
+2. Confirm the kernel string is `5.15.211-android13-r00-lts` (shown in the manager, or `su -c uname -r`).
+3. Verify any features you care about with the commands in [Features & verification](#features--verification).
+
+<a id="susfs-userspace"></a>
+### SUSFS (userspace)
+
+The **kernel side** of SUSFS is already baked into this build (patched in from [`ShirkNeko/susfs4ksu`](https://github.com/ShirkNeko/susfs4ksu), per GKI branch) — you don't install anything for that part.
+
+The **userspace side** (actually configuring what gets hidden) is handled through SukiSU-Ultra. This repo does **not** ship or require a separate SUSFS module — how you drive SUSFS depends on your manager setup. If you use a standalone SUSFS module instead, install it the same way as any other root module.
 
 ---
 
