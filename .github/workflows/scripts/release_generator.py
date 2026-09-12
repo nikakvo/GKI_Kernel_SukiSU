@@ -61,7 +61,7 @@ class ReleaseGenerator:
 - TTL/Hop-Limit Target Support (netfilter)
 - Connection Mark (connmark) Support (netfilter)
 - CIFS/SMB Network Filesystem Support
-- Ptrace Leak Fix (kernels < 5.16)
+- Ptrace Leak Fix (kernels < 5.16) ) and Unicode Fix
 {lto_feature_line}
 
 > **How do I check a feature is actually active on my device?**
