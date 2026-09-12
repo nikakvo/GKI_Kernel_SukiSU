@@ -61,7 +61,7 @@ Active if `sukisu_kpm_version` is listed.
 
 ### Networking
 
-**BBR v3** *(android12/13/14 only, `--bbr-version bbr3`)* — Google's improved successor to BBR v1: better fairness and less bufferbloat under load. Backported via [WildKernels' kABI-compliant patch](https://github.com/WildKernels/kernel_patches/tree/main/common/bbrv3), selected **in place of** BBR v1. Falls back to BBR v1 automatically if the patch doesn't apply on a given branch/sub_level. See [BBRv3 details](#bbrv3-details) below.
+**BBR v3** — Google's improved successor to BBR v1: better fairness and less bufferbloat under load. Backported via [WildKernels' kABI-compliant patch](https://github.com/WildKernels/kernel_patches/tree/main/common/bbrv3), selected **in place of** BBR v1. Falls back to BBR v1 automatically if the patch doesn't apply on a given branch/sub_level. See [BBRv3 details](#bbrv3-details) below.
 ```bash
 su -c "cat /proc/sys/net/ipv4/tcp_congestion_control"
 ```
