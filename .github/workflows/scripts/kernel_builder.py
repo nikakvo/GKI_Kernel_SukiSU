@@ -2225,6 +2225,42 @@ CONFIG_CIFS_XATTR=y
                     content, include_anchor, include_anchor + '#include <linux/susfs.h>\n'
                 )
 
+            # --- hunk #5 equivalent (SukiSU main / UAPI 4 only) ---
+            # Newer SukiSU-Ultra (main after the UAPI 4 bump) grew an
+            # x86 runtime X86_FEATURE_INDIRECT_SAFE check, a ksu_bundled
+            # module param and a MODULE-only ksu_late_loaded assignment
+            # at the top of kernelsu_init(). Hunk #5 removes all three;
+            # when it fails to land we do the same by exact match. Each
+            # block is optional here: on tag v4.2.0 none of them exist
+            # in this form and the hunk either applied or wasn't needed.
+            # On a Built-in (CONFIG_KSU=y) arm64 kernel all three are
+            # dead code anyway (x86-only / MODULE-only), so removing
+            # them cannot change runtime behaviour.
+            hunk5_blocks = [
+                '#ifdef MODULE\n'
+                'bool ksu_bundled = false;\n'
+                'module_param_named(bundled, ksu_bundled, bool, 0);\n'
+                '#endif\n\n',
+                '#if defined(__x86_64__) && !defined(CONFIG_KSU_X86_PATCH_SYSCALL_DISPATCHER)\n'
+                '    // If the kernel has the hardening patch, X86_FEATURE_INDIRECT_SAFE must be set\n'
+                '    if (!boot_cpu_has(X86_FEATURE_INDIRECT_SAFE)) {\n',
+                '#ifdef MODULE\n'
+                '    ksu_late_loaded = (current->pid != 1);\n'
+                '#else\n'
+                '    ksu_late_loaded = false;\n'
+                '#endif\n\n',
+            ]
+            if content.count(hunk5_blocks[0]) == 1:
+                content = content.replace(hunk5_blocks[0], '', 1)
+            x86_rt = re.compile(
+                re.escape(hunk5_blocks[1]) + r'.*?        return -ENOSYS;\n    \}\n#endif\n\n',
+                re.DOTALL,
+            )
+            if len(x86_rt.findall(content)) == 1:
+                content = x86_rt.sub('', content, count=1)
+            if content.count(hunk5_blocks[2]) == 1:
+                content = content.replace(hunk5_blocks[2], '', 1)
+
             # --- hunk #7 equivalent: retire the old hook-manager/
             # symbol-resolver init sequence, wire up the new one ---
             for dead in [
