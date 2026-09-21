@@ -31,12 +31,12 @@ on:
         description: 'Sub Level Version'
         required: true
         type: string
-        default: '211'
+        default: '216'
       os_patch_level:
         description: 'OS Patch Level'
         required: true
         type: string
-        default: '2026-06'
+        default: '2026-09'
       revision:
         description: 'Android 12 Revision (optional)'
         required: false
@@ -139,14 +139,6 @@ on:
           - bbr1
           - bbr3
         default: bbr3
-      lto_mode:
-        description: 'LTO mode (legacy build.sh branches only - android12/android13; ignored on Bazel/Kleaf branches, android14-6.1+, where the mode is fixed upstream). full = slower, single-threaded, RAM-heavy link step for marginally better perf/code-size.'
-        required: true
-        type: choice
-        options:
-          - thin
-          - full
-        default: thin
       make_release:
         description: 'Create GitHub Release'
         required: true
@@ -278,7 +270,11 @@ jobs:
           [ "${{ github.event.inputs.hide_stuff }}" = "false" ] && ARGS="$ARGS --no-hide-stuff"
           [ "${{ github.event.inputs.extra_net }}" = "true" ] && ARGS="$ARGS --extra-net"
           ARGS="$ARGS --bbr-version ${{ github.event.inputs.bbr_version }}"
-          ARGS="$ARGS --lto-mode ${{ github.event.inputs.lto_mode }}"
+          # LTO is always thin on CI: full LTO peaks ~27 GB RAM, more than a
+          # GitHub runner has. (Was an input; removed because workflow_dispatch
+          # allows at most 25 inputs and this file had 26 - GitHub rejected
+          # the whole workflow.) Full-LTO release builds are done locally.
+          ARGS="$ARGS --lto-mode thin"
           [ -z "${{ github.event.inputs.kernelsu_commit }}" ] || ARGS="$ARGS --ksu-commit=${{ github.event.inputs.kernelsu_commit }}"
           [ -z "${{ github.event.inputs.susfs_commit }}" ] || ARGS="$ARGS --susfs-commit=${{ github.event.inputs.susfs_commit }}"
           [ -z "${{ github.event.inputs.custom_version }}" ] || ARGS="$ARGS --custom-version=${{ github.event.inputs.custom_version }}"
