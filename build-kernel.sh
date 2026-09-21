@@ -143,7 +143,7 @@ OS_PATCH="2026-09"
 # NOTE: this is the KERNEL source ref - do NOT paste a susfs4ksu commit
 # here. They are different repositories; the build will fail with an
 # HTTP 500 from googlesource if they get swapped.
-KERNEL_TAG="013ca9e40fcad3368249133b0fb4e00762b40625"
+KERNEL_TAG="android13-5.15.216_r00"
 # Set to "1" if KERNEL_TAG above is an LTS-merge respin (e.g.
 # android13-5.15.209_r00, dotted sub_level style) rather than a regular
 # date-based one (e.g. android13-5.15-2026-06_r4) - adds a "-lts" marker
