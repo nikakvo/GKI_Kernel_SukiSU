@@ -11,14 +11,18 @@
 #      and runs the pipeline's own _recover_susfs_init_c() on it - so the
 #      verdict comes from the same code the build will run, not from counting
 #      hunks,
-#   4. prints the exact ./build-kernel.sh command to run.
+#   4. prints the exact ./build-kernel.sh command to run,
+#   5. remembers that suggestion, and on the NEXT run asks whether you built,
+#      flashed and tested it - answer 1 and it updates the PINNED_* values
+#      below by itself.
 #
 # Read-only for the build workspace. Clones into a cache dir.
 
 set -uo pipefail
 
 # ---- last build that was flashed and confirmed working -----------------------
-# Update these after a new build boots on the phone.
+# Updated automatically when you answer "1" to the question the script asks
+# after a suggested build. Editing by hand still works.
 PINNED_KSU_REF="cf87e3f4ddd3f6e5464d85acf56aaa6950e70841"   # SukiSU main, 2026-09-21
 PINNED_KSU_VERSION_CODE="40939"
 declare -A PINNED_SUSFS=(
@@ -35,13 +39,16 @@ SUSFS_URL="https://github.com/ShirkNeko/susfs4ksu.git"
 CACHE="${GKI_CHECK_CACHE:-$HOME/.cache/gki-check}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 BUILDER_DIR="$SCRIPT_DIR/.github/workflows/scripts"
+SELF="$SCRIPT_DIR/$(basename "${BASH_SOURCE[0]}")"
+ASK=1
 
 while [ $# -gt 0 ]; do
     case "$1" in
         --branch) BRANCH="$2"; shift 2 ;;
         --cache)  CACHE="$2"; shift 2 ;;
+        --no-ask) ASK=0; shift ;;
         -h|--help)
-            echo "Usage: $0 [--branch gki-android13-5.15|gki-android14-6.1|gki-android15-6.6] [--cache DIR]"
+            echo "Usage: $0 [--branch gki-android13-5.15|gki-android14-6.1|gki-android15-6.6] [--cache DIR] [--no-ask]"
             exit 0 ;;
         *) echo "Unknown argument: $1" >&2; exit 1 ;;
     esac
@@ -81,6 +88,75 @@ sync_repo() {   # $1=url $2=dir $3=label
 }
 sync_repo "$SUKI_URL"  "$SUKI"  "SukiSU-Ultra" || exit 1
 sync_repo "$SUSFS_URL" "$SUSFS" "susfs4ksu"    || exit 1
+
+# ---- 0. follow-up on the build suggested last time ---------------------------
+# When the script prints "Build this:" it saves that exact combination here.
+# Next run it asks about THAT combination - not whatever upstream has moved to
+# in the meantime - so answering "1" can never save something you didn't build.
+PENDING="$CACHE/pending-$BRANCH"
+BROKEN="$CACHE/broken-$BRANCH"
+touch "$BROKEN"
+
+save_pins() {   # $1=ksu sha  $2=susfs sha  $3=version code
+    # temp file next to the script so the final mv is an atomic rename (bash
+    # keeps reading the old copy of this running script, never a half-written one)
+    local tmp; tmp="$(mktemp "$SCRIPT_DIR/.check-release.XXXXXX")" || return 1
+    cp "$SELF" "$tmp"; chmod --reference="$SELF" "$tmp" 2>/dev/null
+    if [ "$BRANCH" = "gki-android13-5.15" ]; then
+        # the phone build: SukiSU pin + version code + 5.15 susfs pin
+        sed -i \
+            -e "s|^PINNED_KSU_REF=.*|PINNED_KSU_REF=\"$1\"   # saved $(date +%F)|" \
+            -e "s|^PINNED_KSU_VERSION_CODE=.*|PINNED_KSU_VERSION_CODE=\"$3\"|" \
+            "$tmp"
+    fi
+    # the branch's own susfs pin (other branches only ever touch this line)
+    sed -i -E "s|^([[:space:]]*\[$BRANCH\]=)\"[0-9a-f]*\"|\1\"$2\"|" "$tmp"
+    # verify before replacing the real script
+    if grep -q "\[$BRANCH\]=\"$2\"" "$tmp" && bash -n "$tmp" \
+       && { [ "$BRANCH" != "gki-android13-5.15" ] \
+            || { grep -q "^PINNED_KSU_REF=\"$1\"" "$tmp" \
+                 && grep -q "^PINNED_KSU_VERSION_CODE=\"$3\"" "$tmp"; }; }; then
+        mv -f "$tmp" "$SELF"; return 0
+    fi
+    rm -f "$tmp"; return 1
+}
+
+if [ -s "$PENDING" ]; then
+    read -r P_KSU P_SUSFS P_CODE P_DATE < "$PENDING"
+    PIN_NOW="$(git -C "$SUKI" rev-parse -q --verify "$PINNED_KSU_REF^{commit}" 2>/dev/null)"
+    if [ "$P_KSU" = "$PIN_NOW" ] && [ "$P_SUSFS" = "${PINNED_SUSFS[$BRANCH]:-}" ]; then
+        rm -f "$PENDING"          # already saved (e.g. by hand)
+    elif [ "$ASK" = 1 ] && [ -t 0 ]; then
+        hdr "Last suggested build ($P_DATE)"
+        echo "  SukiSU  ${P_KSU:0:8}   version $P_CODE"
+        echo "  susfs   ${P_SUSFS:0:8}   ($BRANCH)"
+        echo
+        echo "  Did you build, flash and test it?"
+        echo "    1) Yes, it works  - save it as the new known-good build"
+        echo "    2) Not yet        - ask me again next time"
+        echo "    3) It's broken    - never suggest this combination again"
+        read -rp "  Choice [1/2/3, Enter = 2]: " ans
+        case "$ans" in
+            1)
+                if save_pins "$P_KSU" "$P_SUSFS" "$P_CODE"; then
+                    rm -f "$PENDING"
+                    [ "$BRANCH" = "gki-android13-5.15" ] && {
+                        PINNED_KSU_REF="$P_KSU"; PINNED_KSU_VERSION_CODE="$P_CODE"; }
+                    PINNED_SUSFS[$BRANCH]="$P_SUSFS"
+                    ok "Saved. PINNED_* at the top of $(basename "$SELF") now point to it."
+                    echo "        Remember to upload the updated $(basename "$SELF") to GitHub too."
+                else
+                    bad "Could not update $(basename "$SELF") - pins unchanged. Edit them by hand."
+                fi ;;
+            3)
+                echo "$P_KSU $P_SUSFS $P_DATE" >> "$BROKEN"
+                rm -f "$PENDING"
+                warn "Marked as broken. It won't be suggested again (list: $BROKEN)." ;;
+            *)
+                echo "  OK, asking again next time." ;;
+        esac
+    fi
+fi
 
 uapi_of() {     # $1=ref -> number or nothing
     git -C "$SUKI" show "$1:uapi/supercall.h" 2>/dev/null \
@@ -228,6 +304,14 @@ case "$BRANCH" in
     *)                  EXTRA="--no-ath9k "; MENU="menu option 2 (Custom), values from matrix.json" ;;
 esac
 
+if [ "$VERDICT" != "STOP" ] && grep -q "^$CAND_SHA $SUSFS_HEAD " "$BROKEN" 2>/dev/null; then
+    VERDICT="STOP"
+    bad "You marked SukiSU ${CAND_SHA:0:8} + susfs ${SUSFS_HEAD:0:8} as broken earlier."
+    echo "        Waiting for a newer commit. To allow it again, delete its line in:"
+    echo "        $BROKEN"
+    echo
+fi
+
 if [ "$VERDICT" = "STOP" ]; then
     bad "Do not build this combination. Send the output above for a look."
     echo
@@ -259,6 +343,8 @@ echo
 echo "  $MENU"
 
 if [ "$KSU_NEW" = 1 ] || [ "$SUSFS_NEW" = 1 ]; then
+    [ "$CAND_CODE" != "<manager version>" ] && \
+        echo "$CAND_SHA $SUSFS_HEAD $CAND_CODE $(date +%F)" > "$PENDING"
     echo
     echo "  Before flashing:"
     echo "   1. Manager: install the SukiSU CI build for commit ${CAND_SHA:0:8} and"
@@ -269,5 +355,6 @@ if [ "$KSU_NEW" = 1 ] || [ "$SUSFS_NEW" = 1 ]; then
     echo "        susfs_kernelsu_integration -> applied"
     echo "        image_ikconfig             -> all expected present"
     echo "   3. After it boots: manager shows ${CAND_CODE}-${MAIN_UAPI} for both, check-features.sh is clean."
-    echo "   4. Then update PINNED_* at the top of this script, and release as v$CAND_CODE."
+    echo "   4. Run ${B}./$(basename "$SELF")${N} again - it will ask if this build works."
+    echo "      Answer 1 and it saves these values by itself. Then release as v$CAND_CODE."
 fi
