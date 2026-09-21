@@ -15,9 +15,10 @@ This project is developed, built and tested for **one target: `android13-5.15` o
 | `android13-5.15` on `vermeer` (Poco F6 Pro / K70) | **Built, flashed, tested, daily-driven.** This is the project. |
 | Other `android13-5.15` devices | Should boot (standard GKI), but **untested** — your risk. |
 | `android12-5.10`, `android14-6.1` | Tracked in the matrix, scripts attempt them, **untested**. |
-| `android15-6.6` and newer | **Known broken** — build fails. Left disabled. |
+| `android15-6.6` | Builds (KMI checks pass), **untested** — one bootloop report on another device. |
+| `android16-6.12` and newer | Not attempted. |
 
-- Current tested release: `android13-5.15.211` (LTS), tag `android13-5.15.211_r00`, kernel string `5.15.211-android13-r00-lts`.
+- Current tested release: `android13-5.15.216` (LTS), tag `android13-5.15.216_r00`, kernel string `5.15.216-android13-r00-lts`, SukiSU-Ultra **40939** (`main` @ `cf87e3f`, UAPI 4).
 - **Does not** support OnePlus ColorOS 14/15 or non-GKI devices.
 - If you build anything other than `android13-5.15` for `vermeer`, you're on your own — **a working boot.img backup is mandatory**.
 
@@ -223,15 +224,17 @@ chmod +x build-kernel.sh cleanup-workspace.sh
 ./build-kernel.sh
 ```
 
-The tested releases pin known-good SukiSU-Ultra and SUSFS commits:
+The tested releases pin known-good SukiSU-Ultra and SUSFS commits. You don't have to work these out yourself — run [`./check-release.sh`](#checking-for-updates-check-releasesh) and it prints the exact command. The current one:
 
 ```bash
-./build-kernel.sh --ksu-commit v4.2.0 --susfs-commit bca0d2333c1a7d717e7278b019d7af7ba1d16005
+./build-kernel.sh --ksu-commit cf87e3f4ddd3f6e5464d85acf56aaa6950e70841 \
+  --susfs-commit e565931d19256fd821ada01b35263506e7c7a364 \
+  --ksu-version-code 40939
 ```
 
 You'll get a menu:
 ```
-1) Default (android13 / 5.15 / 211 / 2026-06)   ← the tested config for vermeer
+1) Default (android13 / 5.15 / 216 / 2026-09)   ← the tested config for vermeer
 2) Custom (choose your own versions)             ← anything non-android13-5.15 is untested
 3) All versions from matrix.json                 ← every "enabled": true entry, with a pass/fail summary
 ```
@@ -254,8 +257,8 @@ Reclaim disk space between builds (keeps shared repos and the AVB key intact):
 cd .github/workflows/scripts
 pip install PyYAML
 
-# Build the tested default (android13-5.15.211, vermeer)
-python3 build.py --android android13 --kernel 5.15 --sub-level 211 --os-patch 2026-06 --kernel-tag android13-5.15.211_r00 --ath9k
+# Build the tested default (android13-5.15.216, vermeer)
+python3 build.py --android android13 --kernel 5.15 --sub-level 216 --os-patch 2026-09 --kernel-tag android13-5.15.216_r00 --ath9k
 
 # List supported Android/Kernel combinations
 python3 build.py --list-configs
@@ -277,14 +280,14 @@ python3 build.py --android android13 --kernel 5.15 --sub-level 194 --os-patch 20
 
 **A per-sublevel LTS-merge tag** (see [LTS Builds](#lts-builds)):
 ```bash
-python3 build.py --android android13 --kernel 5.15 --sub-level 211 --os-patch 2026-06 \
-    --kernel-tag android13-5.15.211_r00
+python3 build.py --android android13 --kernel 5.15 --sub-level 216 --os-patch 2026-09 \
+    --kernel-tag android13-5.15.216_r00
 ```
 
 **A raw commit SHA** (7–40 hex chars) — when an LTS-merge has landed on Google's `android*-lts` branch but no `_r00` tag is cut yet:
 ```bash
-python3 build.py --android android13 --kernel 5.15 --sub-level 211 --os-patch 2026-06 \
-    --kernel-tag 12b3f6828b67824c794e422d5785dba6eb559bb2
+python3 build.py --android android13 --kernel 5.15 --sub-level 216 --os-patch 2026-09 \
+    --kernel-tag 013ca9e40fcad3368249133b0fb4e00762b40625
 ```
 
 Find the latest respin/tag for your branch at:
@@ -292,7 +295,7 @@ Find the latest respin/tag for your branch at:
 - https://android.googlesource.com/kernel/common/+log/refs/heads/android13-5.15-lts (live LTS log — look for "Merge 5.15.XXX into androidYY-Z.ZZ-lts")
 - https://source.android.com/docs/core/architecture/kernel/gki-android13-5_15-release-builds (official release notes, date-based only)
 
-**If the tag/SHA doesn't exist upstream, the build fails immediately** rather than silently falling back to the moving HEAD — a build that quietly compiles a *different* real sub_level while every filename still claims the one you asked for is far worse than one that refuses to start. The resulting kernel string reflects the pinned respin (e.g. `5.15.211-android13-r00-lts`).
+**If the tag/SHA doesn't exist upstream, the build fails immediately** rather than silently falling back to the moving HEAD — a build that quietly compiles a *different* real sub_level while every filename still claims the one you asked for is far worse than one that refuses to start. The resulting kernel string reflects the pinned respin (e.g. `5.15.216-android13-r00-lts`).
 
 ---
 
@@ -301,13 +304,13 @@ Find the latest respin/tag for your branch at:
 Google keeps a GKI branch current two ways:
 
 1. **Date-based respins** (`android13-5.15-2026-06_r4`) — periodic official snapshots per security patch level; the classic, fully-certified process.
-2. **LTS merges** (`android13-5.15.211_r00`) — once the date-based cadence winds down, Google periodically merges the upstream Linux `5.15.y` **-stable** tree straight into a sibling `android13-5.15-lts` branch and tags the result. Trades full GKI certification for staying current with upstream kernel security fixes.
+2. **LTS merges** (`android13-5.15.216_r00`) — once the date-based cadence winds down, Google periodically merges the upstream Linux `5.15.y` **-stable** tree straight into a sibling `android13-5.15-lts` branch and tags the result. Trades full GKI certification for staying current with upstream kernel security fixes.
 
 Both are real, buildable, and built identically here — LTS is just a different tag naming scheme, not a separate build mode. Any LTS-sourced build (dot-style tag or raw SHA) gets a `-lts` marker appended so it's obvious downstream:
 
-- **Filename:** `android13-5.15.211-2026-06-lto-full-r00-lts-boot.img` (vs. `android13-5.15.206-2026-06-r4-boot.img`)
-- **On-device kernel version:** `5.15.211-android13-r00-lts` (vs. `5.15.206-android13-r4`)
-- SHA-pinned (no tag yet): respin number omitted — `5.15.211-android13-lts`
+- **Filename:** `android13-5.15.216-2026-09-lto-full-r00-lts-boot.img` (vs. `android13-5.15.206-2026-06-r4-boot.img`)
+- **On-device kernel version:** `5.15.216-android13-r00-lts` (vs. `5.15.206-android13-r4`)
+- SHA-pinned (no tag yet): respin number omitted — `5.15.216-android13-lts`
 
 This is detected automatically from the tag format (a dot before the sub_level, or a bare SHA) — you never flag a build as LTS by hand. `matrix.json` marks these `"lts": true` purely for the CI summary; it has no effect on the build.
 
@@ -318,21 +321,43 @@ This is detected automatically from the tag format (a dot before the sub_level, 
 By default the build tracks the latest SukiSU-Ultra and susfs4ksu. That's usually what you want — but both are **fast-moving upstream projects**, and sometimes the newest commit doesn't build (an API change lands before the patches catch up, a hook breaks). When that happens, pin a **known-good commit** instead of waiting for an upstream fix. This is exactly how the tested releases are built:
 
 ```bash
-./build-kernel.sh --ksu-commit v4.2.0 --susfs-commit bca0d2333c1a7d717e7278b019d7af7ba1d16005
+./build-kernel.sh --ksu-commit cf87e3f4ddd3f6e5464d85acf56aaa6950e70841 \
+  --susfs-commit e565931d19256fd821ada01b35263506e7c7a364 \
+  --ksu-version-code 40939
 ```
 
-- **`--ksu-commit <ref>`** — pin SukiSU-Ultra's kernel-side source to a tag (e.g. `v4.2.0`) or commit hash.
+- **`--ksu-commit <ref>`** — pin SukiSU-Ultra's kernel-side source to a tag (e.g. `v4.2.0`) or commit hash. Releases are currently built from SukiSU-Ultra **`main`** (pinned by SHA), because main carries **UAPI 4** and no tag does yet — the current manager needs UAPI 4.
 - **`--susfs-commit <ref>`** — pin susfs4ksu to a specific commit or tag.
+- **`--ksu-version-code <n>`** — pin the version number the kernel reports. Without it, SukiSU's Kbuild asks GitHub for main's live commit count at build time, so the same source reports a different number on different days. The manager checks the number, so it must match the manager you install (it's shown in the app, e.g. `40939-4` — the part after the dash is the UAPI version).
 
-> **`--susfs-commit` is per-branch.** susfs4ksu keeps a **separate branch per GKI version**, each carrying only its own `50_add_susfs_in_gki-<android>-<kernel>.patch`. So a hash is valid for **exactly one** GKI branch — the build refuses a mismatched pin. `bca0d233…` is the `gki-android13-5.15` one; the `android12-5.10` equivalent is `ec785f4`.
+> **Kernel and manager must match.** A kernel built from `main` @ `cf87e3f` reports **40939 / UAPI 4** and pairs with the SukiSU-Ultra manager **40939** from SukiSU's CI. The older manager released for tag `v4.2.0` expects UAPI 2 and will report a mismatch.
+
+> **`--susfs-commit` is per-branch.** susfs4ksu keeps a **separate branch per GKI version**, each carrying only its own `50_add_susfs_in_gki-<android>-<kernel>.patch`. So a hash is valid for **exactly one** GKI branch — the build refuses a mismatched pin. `e565931…` is the `gki-android13-5.15` one; `gki-android14-6.1` and `gki-android15-6.6` each have their own (`check-release.sh --branch …` prints them).
 >
 > To pin different commits per branch in one command, use the `branch=hash` form:
 > ```bash
-> ./build-kernel.sh --ksu-commit v4.2.0 \
->     --susfs-commit 'gki-android12-5.10=ec785f4,gki-android13-5.15=bca0d2333c1a7d717e7278b019d7af7ba1d16005'
+> ./build-kernel.sh --ksu-commit cf87e3f4ddd3f6e5464d85acf56aaa6950e70841 \
+>     --susfs-commit 'gki-android13-5.15=e565931d19256fd821ada01b35263506e7c7a364,gki-android15-6.6=9d9464f191b2d846590ac4d1b52e123df135c401'
 > ```
 
-Pin the two **together** — SUSFS's integration patch targets a specific SukiSU-Ultra source layout, so mixing a pinned SUSFS with a moving SukiSU (or vice versa) can drift out of sync.
+Pin the two **together** — SUSFS's integration patch targets a specific SukiSU-Ultra source layout, so mixing a pinned SUSFS with a moving SukiSU (or vice versa) can drift out of sync. On current SukiSU `main`, three hunks of that patch miss `kernel/core/init.c`; the build finishes that file's migration itself (`_recover_susfs_init_c` in `kernel_builder.py`) and records it in `PATCH_STATUS.json` as `manual kernel/core/init.c fixup`. That's expected — failures in **any other** file stop the build.
+
+### Checking for updates (`check-release.sh`)
+
+Run from the repo root, no build involved:
+
+```bash
+./check-release.sh                              # android13-5.15 (default)
+./check-release.sh --branch gki-android15-6.6   # other branches
+```
+
+It picks the newest SukiSU-Ultra worth building (a UAPI 4 tag if one exists, otherwise `main`), computes its version code the same way the kernel and manager do, finds the newest susfs commit for the branch, then **applies the SUSFS integration patch for real** in a throwaway tree and runs the pipeline's own recovery code on it. The verdict comes from the same code the build runs, not from counting hunks.
+
+- **`OK … Build this:`** — something new, and it patches cleanly. Copy the printed `./build-kernel.sh` command.
+- **`OK … You're up to date`** — nothing new since the last build; the rebuild command is printed anyway (useful for a new kernel sub_level).
+- **`STOP`** — upstream changed something the recovery doesn't know about. Don't build that combination; the last working command is printed instead.
+
+After a new build is flashed and confirmed working, update the `PINNED_*` values at the top of the script.
 
 ---
 
@@ -356,7 +381,7 @@ New entries are added `"enabled": false` (opt-in); existing entries get their `k
 Tracked families: `android12-5.10`, `android13-5.15`, `android14-6.1`, `android15-6.6`, `android16-6.12`, `android17-6.18`. **Only `android13-5.15` is tested.**
 
 ```json
-{"sub_level": "211", "os_patch_level": "2026-06", "kernel_tag": "android13-5.15.211_r00", "lts": true, "enabled": true}
+{"sub_level": "216", "os_patch_level": "2026-09", "kernel_tag": "android13-5.15.216_r00", "lts": true, "enabled": true}
 ```
 
 ---
@@ -375,6 +400,7 @@ Tracked families: `android12-5.10`, `android13-5.15`, `android14-6.1`, `android1
 | `--revision` | Android 12 revision (certified-boot reference downloads) | - |
 | `--ksu-version` | SukiSU-Ultra version (Stable/Dev) | Stable |
 | `--ksu-commit` | Pin a SukiSU-Ultra commit/tag | latest |
+| `--ksu-version-code` | Pin the version number SukiSU reports (must match the manager) | live count |
 | `--susfs-commit` | Pin a SUSFS commit (hash or HEAD~N) | latest |
 | `--zram` | Enable ZRAM (LZ4KD) | False |
 | `--no-kpm` | Disable KPM | False |
@@ -395,7 +421,7 @@ Tracked families: `android12-5.10`, `android13-5.15`, `android14-6.1`, `android1
 
 Each release attaches:
 
-1. **boot.img** — the ready-made boot image (`android13-5.15.211-2026-06-lto-full-r00-lts-boot.img`). Flash over `fastboot`. AVB-signed (see [AVB Signing](#avb-signing)).
+1. **boot.img** — the ready-made boot image (`android13-5.15.216-2026-09-lto-full-r00-lts-boot.img`). Flash over `fastboot`. AVB-signed (see [AVB Signing](#avb-signing)).
 2. **AnyKernel3.zip** — the same kernel packaged for flashing from recovery or a kernel-flasher app, without a PC.
 3. **ath9k_htc_vermeer.zip** — companion module for the ath9k adapter. Only needed with a TL-WN722N v1.
 
@@ -407,6 +433,8 @@ Pick **one** of boot.img or AnyKernel3 — they install the same kernel two diff
 
 > **This is a SukiSU-Ultra kernel.** Root is managed by the **[SukiSU-Ultra](https://github.com/SukiSU-Ultra/SukiSU-Ultra) manager app** — install it (or update to it) so you get a root manager after flashing. See the [SUSFS notes](#susfs-userspace) at the end.
 >
+> **Use the manager version named in the release notes** (currently **40939**, from SukiSU's [CI builds](https://github.com/SukiSU-Ultra/SukiSU-Ultra/actions/workflows/build-manager.yml)). Kernel and manager must report the same number — a mismatched manager shows a version / "kernel needs updating" warning.
+>
 > **Always keep your current, working `boot.img` backed up before flashing anything.** If a flash goes wrong, see [Emergency Recovery](#emergency-recovery).
 
 ### Method 1 — boot.img via fastboot (PC)
@@ -415,12 +443,12 @@ Reboot to the bootloader (`adb reboot bootloader`, or Power + Volume Down), then
 
 **Permanent, both slots** (recommended for daily use):
 ```bash
-fastboot flash boot_ab android13-5.15.211-2026-06-lto-full-r00-lts-boot.img
+fastboot flash boot_ab android13-5.15.216-2026-09-lto-full-r00-lts-boot.img
 ```
 
 **Try it first, without writing anything** (loads the image once into RAM; a normal reboot goes back to your existing kernel):
 ```bash
-fastboot boot android13-5.15.211-2026-06-lto-full-r00-lts-boot.img
+fastboot boot android13-5.15.216-2026-09-lto-full-r00-lts-boot.img
 ```
 
 > **Tip:** instead of typing the long filename, type `fastboot flash boot_ab ` (with the trailing space) and **drag-and-drop the `.img` file** into the terminal — it fills in the full path for you.
@@ -439,8 +467,8 @@ Reboot when done.
 
 ### After flashing
 
-1. Open the **SukiSU-Ultra manager** — it should show the kernel as rooted.
-2. Confirm the kernel string is `5.15.211-android13-r00-lts` (shown in the manager, or `su -c uname -r`).
+1. Open the **SukiSU-Ultra manager** — it should show **Working**, **Built-in**, and the same version for kernel and manager (e.g. `40939-4`).
+2. Confirm the kernel string is `5.15.216-android13-r00-lts` (shown in the manager, or `su -c uname -r`).
 3. Verify any features you care about with the commands in [Features & verification](#features--verification).
 
 <a id="susfs-userspace"></a>
@@ -553,6 +581,7 @@ For most users on an unlocked bootloader this is a formality (AVB verification i
 
 ath9k-module/                  # Source of the ath9k_htc_vermeer.zip flashable module
 build-kernel.sh                # Local interactive build menu (recommended entry point)
+check-release.sh               # Checks upstream SukiSU/susfs and prints the exact build command
 cleanup-workspace.sh           # Reclaims disk space between builds
 ```
 
