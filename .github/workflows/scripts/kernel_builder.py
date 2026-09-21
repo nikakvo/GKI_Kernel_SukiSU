@@ -1418,41 +1418,6 @@ CONFIG_CIFS_XATTR=y
                 f.write(content)
         self._mark("baseband_guard", "applied")
 
-    def add_vendor_module_blacklist(self):
-        """Blocks specific vendor-provided .ko modules from ever loading
-        (CONFIG_DEBLOAT_VENDOR_MODULES) - useful for OEM telemetry/analytics
-        modules that can't otherwise be stopped since they load before
-        KSU/Magisk gets a chance to intervene. Self-disables outside normal
-        boot (recovery/fastbootd) so OTA/flashing is never affected - see
-        the patch's own is_normal_boot() check. Two source-layout variants
-        exist upstream (kernel/module.c pre-6.1 vs kernel/module/main.c on
-        6.1+, since the file was split into a directory)."""
-        if not self.config.blacklist_modules:
-            self._mark("vendor_module_blacklist", "skipped", "not requested")
-            return
-        logger.info("=== Adding vendor module blacklist ===")
-        common_dir = self.work_dir / "common"
-        if not common_dir.exists():
-            self._mark("vendor_module_blacklist", "failed", "common/ missing")
-            return
-        if self.config.kernel_version in ("5.10", "5.15"):
-            patch_name = "vendor_modules_blacklist_5.15_and_below.patch"
-        else:
-            patch_name = "vendor_modules_blacklist_6.1_and_above.patch"
-        patch_file = Path(__file__).parent / "patches" / patch_name
-        ok, detail = self._apply_patch_with_dry_run(patch_file, common_dir)
-        if not ok:
-            logger.warning(f"Vendor module blacklist not applied ({detail}) - source may "
-                           "have changed. The tree was left untouched; continuing "
-                           "without the blacklist.")
-            self._mark("vendor_module_blacklist", "failed", detail)
-            return
-        config_file = common_dir / "arch/arm64/configs/gki_defconfig"
-        with open(config_file, "a") as f:
-            f.write(f'CONFIG_DEBLOAT_VENDOR_MODULES="{self.config.blacklist_modules}"\n')
-        logger.info(f"Blacklisted vendor modules: {self.config.blacklist_modules}")
-        self._mark("vendor_module_blacklist", "applied", self.config.blacklist_modules)
-
     # NOTE: a GENKSYMS-bypass regex fallback used to live here
     # (_try_genksyms_regex_fallback). Removed after a confirmed real-device
     # bootloop: '#ifndef __GENKSYMS__' only hides new fields from genksyms'
@@ -2748,11 +2713,6 @@ CONFIG_CIFS_XATTR=y
             self._configure_zram()
             self._configure_bazel()
 
-        if self.config.enable_ksm:
-            with open(config_file, "a") as f:
-                f.write("# === KSM (Kernel Samepage Merging) Config ===\n")
-                f.write("CONFIG_KSM=y\n")
-
         if self.config.use_mglru:
             with open(config_file, "a") as f:
                 f.write("# === MGLRU (Multi-Gen LRU) Config ===\n")
@@ -2953,7 +2913,6 @@ CONFIG_CIFS_XATTR=y
                             # with "CONFIG_BBR", so this can't use a prefix match
             "CONFIG_ZRAM": "ZRAM",
             "BFQ": "BFQ I/O Scheduler",
-            "CONFIG_KSM": "KSM",
             "F2FS_FS_": "F2FS Compression",
         }
         
@@ -3710,8 +3669,6 @@ CONFIG_CIFS_XATTR=y
             symbols.append(("CONFIG_DEFAULT_BBR3", False))
         elif self.config.bbr_version in ("bbr1", "bbr3"):
             symbols.append(("CONFIG_DEFAULT_BBR", False))
-        if self.config.enable_ksm:
-            symbols.append(("CONFIG_KSM", False))
         if self.config.use_ath9k:
             # All fatal, unlike the networking set below: a dropped option
             # here means either the driver was never built or it was built
@@ -4192,7 +4149,6 @@ CONFIG_CIFS_XATTR=y
             self.add_kernelsu()
             self._pin_ksu_version_code()
             self.add_bbg()
-            self.add_vendor_module_blacklist()
             self.apply_susfs_patches()
             self.apply_susfs_kernelsu_patch()
             self._fix_selinux_hide_always_true_guards()

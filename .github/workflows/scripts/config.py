@@ -193,14 +193,12 @@ class BuildConfig:
     use_ntsync: bool = True
     use_bbg: bool = False
     allow_bazel: bool = False
-    blacklist_modules: str = ""
     # ath9k_htc за TL-WN722N v1 (AR9271) по OTG. Целият wireless
     # стек влиза само като =m и НЕ се пакетира - на устройството
     # се ползват вендорските cfg80211/mac80211 от /vendor/lib/modules.
     use_ath9k: bool = False
     use_droidspaces: bool = False
     support_op8e: bool = False
-    enable_ksm: bool = False
     use_extra_net: bool = False
     bbr_version: str = "bbr1"
     lto_mode: str = "thin"
@@ -304,11 +302,9 @@ class BuildConfig:
             "use_ntsync": self.use_ntsync,
             "use_bbg": self.use_bbg,
             "allow_bazel": self.allow_bazel,
-            "blacklist_modules": self.blacklist_modules,
             "use_ath9k": self.use_ath9k,
             "use_droidspaces": self.use_droidspaces,
             "support_op8e": self.support_op8e,
-            "enable_ksm": self.enable_ksm,
             "use_extra_net": self.use_extra_net,
             "bbr_version": self.bbr_version,
             "make_release": self.make_release,

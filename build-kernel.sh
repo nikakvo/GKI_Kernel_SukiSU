@@ -198,11 +198,6 @@ BBG="1"
 #
 # Set to "" to build without it.
 EXTRA_NET="1"
-# Comma-separated vendor module names to block from ever loading
-# (CONFIG_DEBLOAT_VENDOR_MODULES). Auto-disables itself outside normal
-# boot (recovery/fastbootd), so it never interferes with OTA/flashing.
-# Leave empty ("") to disable this feature entirely.
-BLACKLIST_MODULES=""
 
 # ATH9K: build ath9k_htc + ath9k_common + ath9k_hw + ath as loadable
 # modules, for the TP-Link TL-WN722N v1 (AR9271) over OTG - monitor mode
@@ -371,7 +366,6 @@ for key, entries in data.items():
         [ -n "$DROIDSPACES" ] && EXTRA_ARGS+=(--droidspaces)
         [ -n "$BBG" ] && EXTRA_ARGS+=(--bbg)
         [ -n "$EXTRA_NET" ] && EXTRA_ARGS+=(--extra-net)
-        [ -n "$BLACKLIST_MODULES" ] && EXTRA_ARGS+=(--blacklist-modules "$BLACKLIST_MODULES")
         [ -n "$ATH9K" ] && EXTRA_ARGS+=(--ath9k)
         [ -n "$KSU_VERSION_CODE" ] && EXTRA_ARGS+=(--ksu-version-code "$KSU_VERSION_CODE")
         [ -n "$USE_ZRAM" ] && EXTRA_ARGS+=(--zram)
@@ -456,7 +450,6 @@ EXTRA_ARGS=()
 [ -n "$DROIDSPACES" ] && EXTRA_ARGS+=(--droidspaces)
 [ -n "$BBG" ] && EXTRA_ARGS+=(--bbg)
 [ -n "$EXTRA_NET" ] && EXTRA_ARGS+=(--extra-net)
-[ -n "$BLACKLIST_MODULES" ] && EXTRA_ARGS+=(--blacklist-modules "$BLACKLIST_MODULES")
 [ -n "$ATH9K" ] && EXTRA_ARGS+=(--ath9k)
 [ -n "$KSU_VERSION_CODE" ] && EXTRA_ARGS+=(--ksu-version-code "$KSU_VERSION_CODE")
 [ -n "$USE_ZRAM" ] && EXTRA_ARGS+=(--zram)

@@ -27,7 +27,6 @@ DISPLAY_NAMES = {
     "zram_lz4kd": "ZRAM (LZ4KD)",
     "task_mmu_fixes": "task_mmu.c Fixes",
     "baseband_guard": "Baseband-guard",
-    "vendor_module_blacklist": "Vendor Module Blacklist",
     "droidspaces": "Droidspaces",
     "bbrv3": "BBRv3",
     # Not a patch - the post-build check that every option written into

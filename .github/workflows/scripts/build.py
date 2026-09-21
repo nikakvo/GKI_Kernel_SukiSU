@@ -93,11 +93,6 @@ def parse_args() -> argparse.Namespace:
                              "that may not be ABI-compatible with the device's vendor .ko "
                              "modules. A confirmed real-device bootloop was traced back to this "
                              "exact bypass, so it is not used here.")
-    parser.add_argument("--blacklist-modules", default="",
-                        help="Comma-separated list of vendor module names to block from loading "
-                             "(CONFIG_DEBLOAT_VENDOR_MODULES). Auto-disables itself during "
-                             "recovery/fastbootd boot so it never interferes with OTA/flashing. "
-                             "Example: --blacklist-modules millet_binder,millet_hs,millet_oem_cgroup,millet_pkg,mi_cnss_statistic")
     parser.add_argument("--ath9k", action="store_true",
                         help="Build ath9k_htc + ath9k_common + ath9k_hw + ath as "
                              "loadable modules for the TP-Link TL-WN722N v1 (AR9271) "
@@ -113,7 +108,6 @@ def parse_args() -> argparse.Namespace:
                              "chroot, so a full distro can run its own init (systemd/OpenRC). Only wired up "
                              "for kernel 5.10/5.15/6.1 (android12/13/14) so far.")
     parser.add_argument("--op8e", action="store_true")
-    parser.add_argument("--ksm", action="store_true", help="Enable KSM (Kernel Samepage Merging)")
     parser.add_argument("--extra-net", action="store_true",
                         help="Enable the optional networking config set: IPv6 NAT "
                              "(ip6tables nat table + MASQUERADE), nftables with the "
@@ -203,11 +197,9 @@ def create_build_config(args: argparse.Namespace) -> BuildConfig:
         use_hide_stuff=not args.no_hide_stuff,
         use_bbg=args.bbg,
         allow_bazel=args.allow_bazel,
-        blacklist_modules=args.blacklist_modules,
         use_ath9k=args.ath9k,
         use_droidspaces=args.droidspaces,
         support_op8e=args.op8e,
-        enable_ksm=args.ksm,
         use_extra_net=args.extra_net,
         bbr_version=args.bbr_version,
         lto_mode=args.lto_mode,

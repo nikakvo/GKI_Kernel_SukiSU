@@ -57,21 +57,11 @@ on:
         required: true
         type: boolean
         default: true
-      blacklist_modules:
-        description: 'Comma-separated vendor module names to block from loading (CONFIG_DEBLOAT_VENDOR_MODULES). Leave empty to disable. Auto-disables outside normal boot (recovery/fastbootd).'
-        required: false
-        type: string
-        default: ''
       DROIDSPACES:
         description: 'Enable Droidspaces container-runtime support (namespaces for full Linux distros - see README) - android12/13/14 (5.10/5.15/6.1) only. Uncheck to build without it.'
         required: true
         type: boolean
         default: true
-      enable_ksm:
-        description: 'Enable KSM (Kernel Samepage Merging)'
-        required: true
-        type: boolean
-        default: false
       hide_stuff:
         description: 'Apply 69_hide_stuff.patch (LineageOS/jit-zygote-cache path spoofing) - currently stale against susfs4ksu and fails the build; uncheck to skip it until ShirkNeko/SukiSU_patch fixes it'
         required: true
@@ -232,9 +222,7 @@ jobs:
           [ "${{ github.event.inputs.use_psi }}" = "false" ] && ARGS="$ARGS --no-psi"
           [ "${{ github.event.inputs.use_ntsync }}" = "false" ] && ARGS="$ARGS --no-ntsync"
           [ "${{ github.event.inputs.BBG }}" = "true" ] && ARGS="$ARGS --bbg"
-          [ -n "${{ github.event.inputs.blacklist_modules }}" ] && ARGS="$ARGS --blacklist-modules \"${{ github.event.inputs.blacklist_modules }}\""
           [ "${{ github.event.inputs.DROIDSPACES }}" = "true" ] && ARGS="$ARGS --droidspaces"
-          [ "${{ github.event.inputs.enable_ksm }}" = "true" ] && ARGS="$ARGS --ksm"
           [ "${{ github.event.inputs.hide_stuff }}" = "false" ] && ARGS="$ARGS --no-hide-stuff"
           [ "${{ github.event.inputs.extra_net }}" = "true" ] && ARGS="$ARGS --extra-net"
 

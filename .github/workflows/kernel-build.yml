@@ -97,11 +97,6 @@ on:
         required: true
         type: boolean
         default: true
-      blacklist_modules:
-        description: 'Comma-separated vendor module names to block from loading (CONFIG_DEBLOAT_VENDOR_MODULES). Leave empty to disable. Auto-disables outside normal boot (recovery/fastbootd).'
-        required: false
-        type: string
-        default: ''
       DROIDSPACES:
         description: 'Enable Droidspaces container-runtime support (namespaces for full Linux distros - see README) - android12/13/14 (5.10/5.15/6.1) only. Uncheck to build without it.'
         required: true
@@ -109,11 +104,6 @@ on:
         default: true
       supp_op:
         description: 'Enable OnePlus 8E support'
-        required: true
-        type: boolean
-        default: false
-      enable_ksm:
-        description: 'Enable KSM (Kernel Samepage Merging)'
         required: true
         type: boolean
         default: false
@@ -259,10 +249,8 @@ jobs:
           [ "${{ github.event.inputs.use_psi }}" = "false" ] && ARGS="$ARGS --no-psi"
           [ "${{ github.event.inputs.use_ntsync }}" = "false" ] && ARGS="$ARGS --no-ntsync"
           [ "${{ github.event.inputs.BBG }}" = "true" ] && ARGS="$ARGS --bbg"
-          [ -n "${{ github.event.inputs.blacklist_modules }}" ] && ARGS="$ARGS --blacklist-modules \"${{ github.event.inputs.blacklist_modules }}\""
           [ "${{ github.event.inputs.DROIDSPACES }}" = "true" ] && ARGS="$ARGS --droidspaces"
           [ "${{ github.event.inputs.supp_op }}" = "true" ] && ARGS="$ARGS --op8e"
-          [ "${{ github.event.inputs.enable_ksm }}" = "true" ] && ARGS="$ARGS --ksm"
           [ "${{ github.event.inputs.hide_stuff }}" = "false" ] && ARGS="$ARGS --no-hide-stuff"
           [ "${{ github.event.inputs.extra_net }}" = "true" ] && ARGS="$ARGS --extra-net"
           ARGS="$ARGS --bbr-version ${{ github.event.inputs.bbr_version }}"
