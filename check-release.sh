@@ -13,25 +13,19 @@
 #      hunks,
 #   4. prints the exact ./build-kernel.sh command to run,
 #   5. remembers that suggestion, and on the NEXT run asks whether you built,
-#      flashed and tested it - answer 1 and it updates the PINNED_* values
-#      below by itself.
+#      flashed and tested it - answer 1 and it updates the known-good pins
+#      in config.py by itself.
+#
+# The known-good pins live in ONE place:
+#   .github/workflows/scripts/config.py
+#     DEFAULT_KSU_REF, DEFAULT_KSU_VERSION_CODE, DEFAULT_SUSFS_PINS
+# They are what every unpinned build uses (build-kernel.sh, build.py, both
+# Actions workflows), so saving here also moves the defaults for forks/CI.
 #
 # Read-only for the build workspace. Clones into a cache dir.
 
 set -uo pipefail
 
-# ---- last build that was flashed and confirmed working -----------------------
-# Updated automatically when you answer "1" to the question the script asks
-# after a suggested build. Editing by hand still works.
-PINNED_KSU_REF="cf87e3f4ddd3f6e5464d85acf56aaa6950e70841"   # SukiSU main, 2026-09-21
-PINNED_KSU_VERSION_CODE="40939"
-declare -A PINNED_SUSFS=(
-    [gki-android13-5.15]="e565931d19256fd821ada01b35263506e7c7a364"
-    # 6.1 / 6.6 were last built against SukiSU v4.2.0, not main. Their pins
-    # are kept for reference only; the check below always tests branch HEAD.
-    [gki-android14-6.1]="4fc9c1898ea66f51847cdbc0d1473ea4ef525a70"
-    [gki-android15-6.6]="937215cb3a1b1f333d764c366c7a49972fa8e7a0"
-)
 BRANCH="gki-android13-5.15"
 
 SUKI_URL="https://github.com/SukiSU-Ultra/SukiSU-Ultra.git"
@@ -39,7 +33,7 @@ SUSFS_URL="https://github.com/ShirkNeko/susfs4ksu.git"
 CACHE="${GKI_CHECK_CACHE:-$HOME/.cache/gki-check}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 BUILDER_DIR="$SCRIPT_DIR/.github/workflows/scripts"
-SELF="$SCRIPT_DIR/$(basename "${BASH_SOURCE[0]}")"
+CONFIG_PY="$BUILDER_DIR/config.py"
 ASK=1
 
 while [ $# -gt 0 ]; do
@@ -72,6 +66,33 @@ done
     echo "Run this script from the repo root (next to build-kernel.sh)." >&2
     exit 1; }
 
+# ---- known-good pins, read from config.py ------------------------------------
+# ast, not import: importing config.py does a network fetch at import time.
+read_pins() {
+    local out
+    out="$(python3 - "$CONFIG_PY" <<'PY'
+import ast, sys
+vals = {}
+for n in ast.parse(open(sys.argv[1]).read()).body:
+    if isinstance(n, ast.Assign) and len(n.targets) == 1:
+        name = getattr(n.targets[0], "id", None)
+        if name in ("DEFAULT_KSU_REF", "DEFAULT_KSU_VERSION_CODE", "DEFAULT_SUSFS_PINS"):
+            vals[name] = ast.literal_eval(n.value)
+print(f"PINNED_KSU_REF={vals.get('DEFAULT_KSU_REF', '')}")
+print(f"PINNED_KSU_VERSION_CODE={vals.get('DEFAULT_KSU_VERSION_CODE', '')}")
+for b, r in vals.get("DEFAULT_SUSFS_PINS", {}).items():
+    print(f"SUSFS {b} {r}")
+PY
+)" || return 1
+    PINNED_KSU_REF="$(printf '%s\n' "$out" | sed -n 's/^PINNED_KSU_REF=//p')"
+    PINNED_KSU_VERSION_CODE="$(printf '%s\n' "$out" | sed -n 's/^PINNED_KSU_VERSION_CODE=//p')"
+    declare -gA PINNED_SUSFS=()
+    while read -r _ b r; do PINNED_SUSFS[$b]="$r"; done \
+        < <(printf '%s\n' "$out" | grep '^SUSFS ')
+    [ -n "$PINNED_KSU_REF" ]
+}
+read_pins || { echo "Could not read DEFAULT_KSU_REF & co. from $CONFIG_PY" >&2; exit 1; }
+
 mkdir -p "$CACHE"
 SUKI="$CACHE/SukiSU-Ultra"
 SUSFS="$CACHE/susfs4ksu"
@@ -97,28 +118,46 @@ PENDING="$CACHE/pending-$BRANCH"
 BROKEN="$CACHE/broken-$BRANCH"
 touch "$BROKEN"
 
-save_pins() {   # $1=ksu sha  $2=susfs sha  $3=version code
-    # temp file next to the script so the final mv is an atomic rename (bash
-    # keeps reading the old copy of this running script, never a half-written one)
-    local tmp; tmp="$(mktemp "$SCRIPT_DIR/.check-release.XXXXXX")" || return 1
-    cp "$SELF" "$tmp"; chmod --reference="$SELF" "$tmp" 2>/dev/null
-    if [ "$BRANCH" = "gki-android13-5.15" ]; then
-        # the phone build: SukiSU pin + version code + 5.15 susfs pin
-        sed -i \
-            -e "s|^PINNED_KSU_REF=.*|PINNED_KSU_REF=\"$1\"   # saved $(date +%F)|" \
-            -e "s|^PINNED_KSU_VERSION_CODE=.*|PINNED_KSU_VERSION_CODE=\"$3\"|" \
-            "$tmp"
-    fi
-    # the branch's own susfs pin (other branches only ever touch this line)
-    sed -i -E "s|^([[:space:]]*\[$BRANCH\]=)\"[0-9a-f]*\"|\1\"$2\"|" "$tmp"
-    # verify before replacing the real script
-    if grep -q "\[$BRANCH\]=\"$2\"" "$tmp" && bash -n "$tmp" \
-       && { [ "$BRANCH" != "gki-android13-5.15" ] \
-            || { grep -q "^PINNED_KSU_REF=\"$1\"" "$tmp" \
-                 && grep -q "^PINNED_KSU_VERSION_CODE=\"$3\"" "$tmp"; }; }; then
-        mv -f "$tmp" "$SELF"; return 0
-    fi
-    rm -f "$tmp"; return 1
+save_pins() {   # $1=ksu sha  $2=susfs sha  $3=version code  -> edits config.py
+    # temp file in the same dir so the final mv is an atomic rename
+    local tmp; tmp="$(mktemp "$BUILDER_DIR/.config.py.XXXXXX")" || return 1
+    python3 - "$CONFIG_PY" "$tmp" "$BRANCH" "$1" "$2" "$3" <<'PY' || { rm -f "$tmp"; return 1; }
+import ast, re, sys
+src_path, dst, branch, ksu, susfs, code = sys.argv[1:]
+s = open(src_path).read()
+
+def sub1(pattern, repl, text):
+    new, n = re.subn(pattern, repl, text, count=1, flags=re.M)
+    if n != 1:
+        sys.exit(f"pattern not found: {pattern}")
+    return new
+
+if branch == "gki-android13-5.15":
+    # the phone build moves the SukiSU pin + version code too
+    s = sub1(r'^DEFAULT_KSU_REF = "[^"]*"', f'DEFAULT_KSU_REF = "{ksu}"', s)
+    s = sub1(r'^DEFAULT_KSU_VERSION_CODE = \d+', f'DEFAULT_KSU_VERSION_CODE = {code}', s)
+
+line = re.compile(r'^(\s*)"' + re.escape(branch) + r'": "[0-9a-f]*",', re.M)
+if line.search(s):
+    s = line.sub(lambda m: f'{m.group(1)}"{branch}": "{susfs}",', s, count=1)
+else:   # branch not pinned yet: add it before the closing brace of the dict
+    s = sub1(r'^(DEFAULT_SUSFS_PINS = \{\n(?:.*\n)*?)(\})',
+             lambda m: f'{m.group(1)}    "{branch}": "{susfs}",\n{m.group(2)}', s)
+
+# must still parse and hold exactly what we meant to write
+vals = {}
+for n in ast.parse(s).body:
+    if isinstance(n, ast.Assign) and len(n.targets) == 1:
+        vals[getattr(n.targets[0], "id", None)] = n.value
+pins = ast.literal_eval(vals["DEFAULT_SUSFS_PINS"])
+assert pins.get(branch) == susfs
+if branch == "gki-android13-5.15":
+    assert ast.literal_eval(vals["DEFAULT_KSU_REF"]) == ksu
+    assert ast.literal_eval(vals["DEFAULT_KSU_VERSION_CODE"]) == int(code)
+open(dst, "w").write(s)
+PY
+    chmod --reference="$CONFIG_PY" "$tmp" 2>/dev/null
+    mv -f "$tmp" "$CONFIG_PY"
 }
 
 if [ -s "$PENDING" ]; then
@@ -143,10 +182,11 @@ if [ -s "$PENDING" ]; then
                     [ "$BRANCH" = "gki-android13-5.15" ] && {
                         PINNED_KSU_REF="$P_KSU"; PINNED_KSU_VERSION_CODE="$P_CODE"; }
                     PINNED_SUSFS[$BRANCH]="$P_SUSFS"
-                    ok "Saved. PINNED_* at the top of $(basename "$SELF") now point to it."
-                    echo "        Remember to upload the updated $(basename "$SELF") to GitHub too."
+                    ok "Saved as the known-good build in config.py."
+                    echo "        Upload .github/workflows/scripts/config.py to GitHub too -"
+                    echo "        that also moves the default pins for CI and forks."
                 else
-                    bad "Could not update $(basename "$SELF") - pins unchanged. Edit them by hand."
+                    bad "Could not update config.py - pins unchanged. Edit them by hand."
                 fi ;;
             3)
                 echo "$P_KSU $P_SUSFS $P_DATE" >> "$BROKEN"
@@ -222,7 +262,10 @@ SUSFS_PIN="${PINNED_SUSFS[$BRANCH]:-}"
 SUSFS_HEAD="$(sha_of "$SUSFS" "origin/$BRANCH")"
 [ -n "$SUSFS_HEAD" ] || { bad "branch $BRANCH does not exist on $SUSFS_URL"; exit 1; }
 SUSFS_NEW=0
-if [ -n "$SUSFS_PIN" ] && [ "$SUSFS_HEAD" != "$(sha_of "$SUSFS" "$SUSFS_PIN")" ]; then
+if [ -z "$SUSFS_PIN" ]; then
+    SUSFS_NEW=1
+    echo "  HEAD   ${SUSFS_HEAD:0:8}  (no known-good pin for this branch in config.py yet)"
+elif [ "$SUSFS_HEAD" != "$(sha_of "$SUSFS" "$SUSFS_PIN")" ]; then
     SUSFS_NEW=1
     echo "  built  ${SUSFS_PIN:0:8}"
     echo "  HEAD   ${SUSFS_HEAD:0:8}  ($(git -C "$SUSFS" rev-list --count "$SUSFS_PIN..$SUSFS_HEAD" 2>/dev/null || echo '?') new):"
@@ -355,6 +398,7 @@ if [ "$KSU_NEW" = 1 ] || [ "$SUSFS_NEW" = 1 ]; then
     echo "        susfs_kernelsu_integration -> applied"
     echo "        image_ikconfig             -> all expected present"
     echo "   3. After it boots: manager shows ${CAND_CODE}-${MAIN_UAPI} for both, check-features.sh is clean."
-    echo "   4. Run ${B}./$(basename "$SELF")${N} again - it will ask if this build works."
-    echo "      Answer 1 and it saves these values by itself. Then release as v$CAND_CODE."
+    echo "   4. Run ${B}./check-release.sh${N} again - it will ask if this build works."
+    echo "      Answer 1 and it saves these values into config.py by itself."
+    echo "      Then upload config.py and release as v$CAND_CODE."
 fi

@@ -4168,39 +4168,6 @@ CONFIG_CIFS_XATTR=y
             artifacts.append(str(zip_dest))
         return artifacts
 
-    def apply_safemode_patch(self):
-        """Permanently disable KernelSU/SukiSU volume-key safe-mode
-        detection (ksud.c). Most users rely on Yet Another Bootloop
-        Protector instead, and the volume-key combo can trigger by
-        accident. Locates ksud.c dynamically instead of assuming a fixed
-        path, since SukiSU-Ultra's internal source layout isn't something
-        we control."""
-        logger.info("=== Disabling safe mode (ksud.c) ===")
-        find_result = self._run_cmd(
-            f"find {self.work_dir} -path '*/runtime/ksud.c' -type f",
-            check=False, capture_output=True)
-        target_files = [l.strip() for l in (find_result.stdout or "").splitlines() if l.strip()]
-        if not target_files:
-            logger.warning("Could not find ksud.c - skipping safe-mode patch")
-            self._mark("safemode_disable", "failed", "ksud.c not found")
-            return
-
-        target = target_files[0]
-        patch_src = Path(__file__).parent / "patches" / "disable-safemode-full.patch"
-        if not patch_src.exists():
-            logger.warning(f"Safe-mode patch file not found at {patch_src} - skipping")
-            self._mark("safemode_disable", "failed", "patch file missing")
-            return
-
-        result = self._run_cmd(f"patch {target} < {patch_src}", check=False)
-        if result.returncode == 0:
-            logger.info(f"Safe mode disabled successfully: {target}")
-            self._mark("safemode_disable", "applied")
-        else:
-            logger.warning(f"Safe-mode patch did not apply cleanly to {target} - "
-                          "ksud.c may have changed upstream, continuing without it")
-            self._mark("safemode_disable", "failed", "did not apply cleanly")
-
     def build(self) -> BuildResult:
         import time
         start_time = time.time()
@@ -4224,10 +4191,6 @@ CONFIG_CIFS_XATTR=y
             self.add_kernel_supatch()
             self.add_kernelsu()
             self._pin_ksu_version_code()
-            if self.config.disable_safemode:
-                self.apply_safemode_patch()
-            else:
-                self._mark("safemode_disable", "skipped", "not requested")
             self.add_bbg()
             self.add_vendor_module_blacklist()
             self.apply_susfs_patches()

@@ -29,14 +29,18 @@ checkout state - it only fetches and reads.
 
 Usage
 -----
-  # every branch enabled in matrix.json, last 14 days of activity
+  # every branch enabled in matrix.json, compared against the known-good
+  # DEFAULT_SUSFS_PINS in config.py (what an unpinned build uses)
   python3 check_susfs.py
 
-  # compare against the pins you actually build with
-  python3 check_susfs.py --pin 'gki-android12-5.10=ec785f4,gki-android13-5.15=bca0d23'
+  # compare against some other pins
+  python3 check_susfs.py --pin 'gki-android12-5.10=ec785f4,gki-android13-5.15=e565931'
+
+  # just report recent activity, no pins
+  python3 check_susfs.py --pin none
 
   # single branch
-  python3 check_susfs.py --branch gki-android13-5.15 --pin bca0d23
+  python3 check_susfs.py --branch gki-android13-5.15 --pin e565931
 
   # in CI, or anywhere without an existing workspace clone
   python3 check_susfs.py --pin ... --github-summary
@@ -52,6 +56,22 @@ import tempfile
 from pathlib import Path
 
 SUSFS_REPO_URL = "https://github.com/ShirkNeko/susfs4ksu.git"
+
+
+def default_pins() -> str:
+    """DEFAULT_SUSFS_PINS from config.py as a 'branch=ref,...' string.
+
+    Read with ast rather than imported: importing config.py does a network
+    fetch at import time, and all this needs is one literal dict.
+    """
+    import ast
+    src = (Path(__file__).resolve().parent / "config.py").read_text()
+    for node in ast.parse(src).body:
+        if (isinstance(node, ast.Assign) and len(node.targets) == 1
+                and getattr(node.targets[0], "id", None) == "DEFAULT_SUSFS_PINS"):
+            pins = ast.literal_eval(node.value)
+            return ",".join(f"{b}={r}" for b, r in pins.items())
+    return ""
 
 # Files a change to which can plausibly break a build here, most
 # dangerous first. The label is what gets printed; the matcher takes the
@@ -371,8 +391,9 @@ def main() -> int:
     )
     parser.add_argument("--pin", default="",
                         help="Same syntax as build.py's --susfs-commit: a bare ref, "
-                             "or 'branch=ref,branch=ref'. Omit to just report recent "
-                             "activity instead of comparing against a pin.")
+                             "or 'branch=ref,branch=ref'. Omit to compare against "
+                             "DEFAULT_SUSFS_PINS in config.py; 'none' to just report "
+                             "recent activity instead.")
     parser.add_argument("--branch", action="append", default=[],
                         help="susfs4ksu branch to check (repeatable). Defaults to the "
                              "branches used by enabled matrix.json entries.")
@@ -390,8 +411,15 @@ def main() -> int:
                              "pin can move (for scheduled CI runs)")
     args = parser.parse_args()
 
+    pin_arg = args.pin.strip()
+    if not pin_arg:
+        pin_arg = default_pins()
+        if pin_arg:
+            print(f"Using DEFAULT_SUSFS_PINS from config.py: {pin_arg}")
+    elif pin_arg.lower() == "none":
+        pin_arg = ""
     try:
-        pins, bare = parse_pins(args.pin)
+        pins, bare = parse_pins(pin_arg)
     except RuntimeError as e:
         print(f"error: {e}", file=sys.stderr)
         return 1

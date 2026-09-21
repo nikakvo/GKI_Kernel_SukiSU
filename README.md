@@ -34,7 +34,7 @@ Builds on the work of others in the GKI/KernelSU ecosystem:
 - **[WildKernels/kernel_patches](https://github.com/WildKernels/kernel_patches)** — the BBRv3 backport patches (`common/bbrv3`).
 - **[ravindu644/Droidspaces-OSS](https://github.com/ravindu644/Droidspaces-OSS)** — the container-runtime app and kABI-compliant kernel patches; [WildKernels/GKI_KernelSU_SUSFS](https://github.com/WildKernels/GKI_KernelSU_SUSFS) was the reference for wiring Droidspaces into a GKI pipeline.
 
-Since forked, this repo has diverged significantly (exact GKI respin pinning including LTS-merge tags/commits, automatic matrix updates, local-build tooling, AVB signing, safe-mode removal, ath9k_htc adapter support) and is maintained as an independent project.
+Since forked, this repo has diverged significantly (exact GKI respin pinning including LTS-merge tags/commits, automatic matrix updates, local-build tooling, AVB signing, ath9k_htc adapter support) and is maintained as an independent project.
 
 ---
 
@@ -224,13 +224,7 @@ chmod +x build-kernel.sh cleanup-workspace.sh
 ./build-kernel.sh
 ```
 
-The tested releases pin known-good SukiSU-Ultra and SUSFS commits. You don't have to work these out yourself — run [`./check-release.sh`](#checking-for-updates-check-releasesh) and it prints the exact command. The current one:
-
-```bash
-./build-kernel.sh --ksu-commit cf87e3f4ddd3f6e5464d85acf56aaa6950e70841 \
-  --susfs-commit e565931d19256fd821ada01b35263506e7c7a364 \
-  --ksu-version-code 40939
-```
+With no flags it builds **the exact SukiSU-Ultra / SUSFS combination the latest release was built from** — the known-good pins live in [`config.py`](#known-good-pins-configpy), so a fresh clone or fork needs nothing extra. To see whether upstream has something newer, run [`./check-release.sh`](#checking-for-updates-check-releasesh): it prints the exact command to build it.
 
 You'll get a menu:
 ```
@@ -250,6 +244,8 @@ Reclaim disk space between builds (keeps shared repos and the AVB key intact):
 
 - **Kernel Build** workflow → build a single version (pick Android/kernel/options).
 - **Build Kernels** workflow → build every enabled matrix entry.
+
+Leave the **SukiSU / version code / SUSFS** inputs **empty** and the workflows use the same known-good pins from `config.py` as a local build — that's the right choice for a fork. Fill them in only to try something else (`main` for SukiSU's moving branch, `latest` for every susfs branch HEAD).
 
 ### Command-line (manual)
 
@@ -318,7 +314,26 @@ This is detected automatically from the tag format (a dot before the sub_level, 
 
 ## Pinning SukiSU-Ultra / SUSFS (`--ksu-commit`, `--susfs-commit`)
 
-By default the build tracks the latest SukiSU-Ultra and susfs4ksu. That's usually what you want — but both are **fast-moving upstream projects**, and sometimes the newest commit doesn't build (an API change lands before the patches catch up, a hook breaks). When that happens, pin a **known-good commit** instead of waiting for an upstream fix. This is exactly how the tested releases are built:
+Both SukiSU-Ultra and susfs4ksu are **fast-moving upstream projects**, and the newest commit doesn't always build (an API change lands before the patches catch up, a hook breaks). So builds are **pinned by default** to a known-good combination, and moving it is a deliberate step.
+
+<a id="known-good-pins-configpy"></a>
+### Known-good pins (`config.py`)
+
+The single source of truth is the top of `.github/workflows/scripts/config.py`:
+
+```python
+DEFAULT_KSU_REF = "cf87e3f4ddd3f6e5464d85acf56aaa6950e70841"
+DEFAULT_KSU_VERSION_CODE = 40939
+DEFAULT_SUSFS_PINS = {
+    "gki-android13-5.15": "e565931d19256fd821ada01b35263506e7c7a364",
+    "gki-android14-6.1": "273ae364c5b7c92ceb15634c9f075b6fc0501048",
+    "gki-android15-6.6": "9d9464f191b2d846590ac4d1b52e123df135c401",
+}
+```
+
+Every entry point uses these when not told otherwise — `./build-kernel.sh`, `build.py`, and both Actions workflows with their pin inputs empty — and the build log prints which pins it used. `check-release.sh` updates them for you once a new build is confirmed working. `android13-5.15` is built, flashed and daily-driven; the 6.1 / 6.6 pins are verified to patch but not device-tested. Branches without an entry build from their susfs branch HEAD.
+
+The equivalent explicit command (this is what `check-release.sh` prints):
 
 ```bash
 ./build-kernel.sh --ksu-commit cf87e3f4ddd3f6e5464d85acf56aaa6950e70841 \
@@ -326,9 +341,11 @@ By default the build tracks the latest SukiSU-Ultra and susfs4ksu. That's usuall
   --ksu-version-code 40939
 ```
 
-- **`--ksu-commit <ref>`** — pin SukiSU-Ultra's kernel-side source to a tag (e.g. `v4.2.0`) or commit hash. Releases are currently built from SukiSU-Ultra **`main`** (pinned by SHA), because main carries **UAPI 4** and no tag does yet — the current manager needs UAPI 4.
-- **`--susfs-commit <ref>`** — pin susfs4ksu to a specific commit or tag.
-- **`--ksu-version-code <n>`** — pin the version number the kernel reports. Without it, SukiSU's Kbuild asks GitHub for main's live commit count at build time, so the same source reports a different number on different days. The manager checks the number, so it must match the manager you install (it's shown in the app, e.g. `40939-4` — the part after the dash is the UAPI version).
+### Overriding the pins
+
+- **`--ksu-commit <ref>`** — SukiSU-Ultra tag, branch or commit. `main` tracks the moving branch. Releases are currently built from SukiSU-Ultra **`main`** (pinned by SHA), because main carries **UAPI 4** and no tag does yet — the current manager needs UAPI 4.
+- **`--susfs-commit <ref>`** — susfs4ksu commit, `HEAD~N`, a per-branch map (below), or `latest` for every branch HEAD.
+- **`--ksu-version-code <n>`** — the version number the kernel reports. Without a pin, SukiSU's Kbuild asks GitHub for main's live commit count at build time, so the same source reports a different number on different days. The manager checks the number, so it must match the manager you install (it's shown in the app, e.g. `40939-4` — the part after the dash is the UAPI version). `DEFAULT_KSU_VERSION_CODE` is applied automatically **only** when building `DEFAULT_KSU_REF`; with any other `--ksu-commit`, pass this yourself.
 
 > **Kernel and manager must match.** A kernel built from `main` @ `cf87e3f` reports **40939 / UAPI 4** and pairs with the SukiSU-Ultra manager **40939** from SukiSU's CI. The older manager released for tag `v4.2.0` expects UAPI 2 and will report a mismatch.
 
@@ -357,7 +374,16 @@ It picks the newest SukiSU-Ultra worth building (a UAPI 4 tag if one exists, oth
 - **`OK … You're up to date`** — nothing new since the last build; the rebuild command is printed anyway (useful for a new kernel sub_level).
 - **`STOP`** — upstream changed something the recovery doesn't know about. Don't build that combination; the last working command is printed instead.
 
-After a new build is flashed and confirmed working, update the `PINNED_*` values at the top of the script.
+When it suggests a build, it remembers exactly that combination. **Run it again after you've built, flashed and tested**, and it asks:
+
+```
+  Did you build, flash and test it?
+    1) Yes, it works  - save it as the new known-good build
+    2) Not yet        - ask me again next time
+    3) It's broken    - never suggest this combination again
+```
+
+`1` writes the new pins into `config.py` (then upload that file — it also moves the defaults for CI and forks). `3` blacklists the combination until upstream moves on. `--no-ask` skips the question.
 
 ---
 
@@ -398,17 +424,16 @@ Tracked families: `android12-5.10`, `android13-5.15`, `android14-6.1`, `android1
 | `--lts` | Mark build as LTS-sourced. Rarely needed — auto-detected from `--kernel-tag` | auto |
 | `--ath9k` | Build ath9k_htc + ath9k_common + ath9k_hw + ath as out-of-tree modules for a TL-WN722N v1 (see [ath9k_htc details](#ath9khtc-details)) | False |
 | `--revision` | Android 12 revision (certified-boot reference downloads) | - |
-| `--ksu-version` | SukiSU-Ultra version (Stable/Dev) | Stable |
-| `--ksu-commit` | Pin a SukiSU-Ultra commit/tag | latest |
-| `--ksu-version-code` | Pin the version number SukiSU reports (must match the manager) | live count |
-| `--susfs-commit` | Pin a SUSFS commit (hash or HEAD~N) | latest |
+| `--ksu-version` | Label only (Stable/Dev, shown in Telegram notifications) — does not select a source | Stable |
+| `--ksu-commit` | SukiSU-Ultra commit/tag/branch (`main` = moving branch) | `DEFAULT_KSU_REF` |
+| `--ksu-version-code` | Version number SukiSU reports (must match the manager) | `DEFAULT_KSU_VERSION_CODE` with the default ref, else live count |
+| `--susfs-commit` | SUSFS commit, `HEAD~N`, `branch=hash,...`, or `latest` | `DEFAULT_SUSFS_PINS` |
 | `--zram` | Enable ZRAM (LZ4KD) | False |
 | `--no-kpm` | Disable KPM | False |
 | `--bbg` | Enable Baseband-guard | False |
 | `--droidspaces` | Enable Droidspaces (android12/13/14 only) | False |
 | `--op8e` | Enable OnePlus 8E support | False |
 | `--bbr-version` | Congestion control: `none`, `bbr1`, or `bbr3` (bbr3 android12/13/14 only) | bbr1 |
-| `--disable-safemode` | Permanently disable volume-key safe-mode detection | False |
 | `--no-release` | Don't create a GitHub Release | False |
 | `--custom-version` | Custom `CONFIG_LOCALVERSION` string | - |
 | `--list-configs` | List supported Android/Kernel combinations | - |
@@ -566,7 +591,7 @@ For most users on an unlocked bootloader this is a formality (AVB verification i
 ├── scripts/
 │   ├── build.py               # Main build script (CLI entry point)
 │   ├── kernel_builder.py      # Core kernel build class
-│   ├── config.py              # Configuration definitions and validation
+│   ├── config.py              # Configuration + the known-good SukiSU/SUSFS pins (DEFAULT_*)
 │   ├── matrix_generator.py    # GitHub Actions matrix generator
 │   ├── patch_summary.py       # Aggregates per-build patch status into one CI summary table
 │   ├── release_generator.py   # Release notes generator (feature list only)
@@ -581,7 +606,7 @@ For most users on an unlocked bootloader this is a formality (AVB verification i
 
 ath9k-module/                  # Source of the ath9k_htc_vermeer.zip flashable module
 build-kernel.sh                # Local interactive build menu (recommended entry point)
-check-release.sh               # Checks upstream SukiSU/susfs and prints the exact build command
+check-release.sh               # Checks upstream SukiSU/susfs, prints the build command, saves new pins to config.py
 cleanup-workspace.sh           # Reclaims disk space between builds
 ```
 

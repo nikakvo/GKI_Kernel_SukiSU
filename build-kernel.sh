@@ -55,7 +55,14 @@ LOGFILE="$HOME/build-$(date +%Y%m%d-%H%M%S).log"
 # unrelated label in a different function and produces dead code that
 # fails the build under -Werror=unused-*. Pass this until ShirkNeko/
 # SukiSU_patch updates it to match current susfs4ksu.
-# Usage: ./build-kernel.sh --ksu-commit v4.2.0 --no-hide-stuff
+# Usage: ./build-kernel.sh --no-hide-stuff
+#
+# PINS: with no --ksu-commit / --susfs-commit / --ksu-version-code, the
+# build uses the known-good pins in .github/workflows/scripts/config.py
+# (DEFAULT_KSU_REF, DEFAULT_KSU_VERSION_CODE, DEFAULT_SUSFS_PINS) - the
+# exact combination the latest release was built from. ./check-release.sh
+# tells you when upstream has something newer, prints the command to
+# build it, and updates those config.py pins once you confirm it works.
 # --susfs-commit <ref>: pin susfs4ksu's KernelSU-integration patch
 # (kernel_patches/KernelSU/10_enable_susfs_for_ksu.patch) to a specific
 # commit instead of tracking its moving branch. That patch is
@@ -75,13 +82,17 @@ LOGFILE="$HOME/build-$(date +%Y%m%d-%H%M%S).log"
 # of failing later with "SUSFS patch file not found".
 #
 # For a single-version build just pass that branch's own ref:
-#   ./build-kernel.sh --ksu-commit v4.2.0 --susfs-commit bca0d2333c1a7d717e7278b019d7af7ba1d16005
+#   ./build-kernel.sh --ksu-commit cf87e3f4ddd3f6e5464d85acf56aaa6950e70841 \
+#       --susfs-commit e565931d19256fd821ada01b35263506e7c7a364 --ksu-version-code 40939
 #
 # For option 3 (build everything in matrix.json), use the per-branch
 # form so each branch gets its own correct pin - branches you leave out
 # simply build from their branch HEAD:
-#   ./build-kernel.sh --ksu-commit v4.2.0 \
-#       --susfs-commit 'gki-android12-5.10=ec785f4,gki-android13-5.15=bca0d2333c1a7d717e7278b019d7af7ba1d16005'
+#   ./build-kernel.sh --susfs-commit 'gki-android13-5.15=e565931,gki-android15-6.6=9d9464f'
+#
+# --susfs-commit latest   tracks every susfs4ksu branch HEAD
+# --ksu-commit main       tracks SukiSU-Ultra main (pass --ksu-version-code
+#                         too, or the number won't match your manager)
 KSU_COMMIT=""
 SUSFS_COMMIT=""
 NO_HIDE_STUFF=""
@@ -126,7 +137,8 @@ while [ "$#" -gt 0 ]; do
             ;;
         *)
             echo "Unknown argument: $1"
-            echo "Usage: $0 [--ksu-commit <tag|commit|branch>] [--susfs-commit <commit>] [--no-hide-stuff] [--no-ath9k] [--ksu-version-code <N>]"
+            echo "Usage: $0 [--ksu-commit <tag|commit|branch>] [--susfs-commit <commit|branch=commit,...|latest>] [--ksu-version-code <N>] [--no-hide-stuff] [--no-ath9k]"
+            echo "Without pin flags, the known-good pins from .github/workflows/scripts/config.py are used."
             exit 1
             ;;
     esac
@@ -212,17 +224,10 @@ BLACKLIST_MODULES=""
 # that currently ships the required no_mac80211_leds patch).
 ATH9K="1"
 [ -n "$NO_ATH9K" ] && ATH9K=""
-# Pin the version number SukiSU reports (e.g. 40901 to pair with the
-# manager released from tag v4.2.0). Empty = use the live GitHub count.
+# Pin the version number SukiSU reports (must match the manager).
+# Empty = DEFAULT_KSU_VERSION_CODE from config.py when building the default
+# SukiSU pin, otherwise the live GitHub count.
 KSU_VERSION_CODE="${KSU_VERSION_CODE:-}"
-# Set to "1" to permanently patch out KernelSU/SukiSU volume-key safe-mode
-# detection. Defaults OFF: SukiSU-Ultra fixed the safe-mode bug upstream
-# (see the "Safe Mode Disabled" fix in nikakvo/GKI_KernelSU_SUSFS actions
-# history), so this patch is no longer needed for most people - only turn
-# it on if you specifically want safe-mode detection permanently disabled
-# regardless of what upstream does. Most people should rely on
-# YABP (github.com/Magisk-Modules-Repo/YetAnotherBootloopProtector) instead.
-DISABLE_SAFEMODE=""
 # ZRAM (LZ4KD compression). Was hardcoded on before - now toggleable.
 # Defaults to enabled to preserve current behavior.
 USE_ZRAM="1"
@@ -231,11 +236,9 @@ USE_ZRAM="1"
 USE_MGLRU="1"
 USE_PSI="1"
 USE_NTSYNC="1"
-# KSU_COMMIT is set above from --ksu-commit (defaults to "" - tracks
-# whatever setup.sh/the local KernelSU/ clone happens to be on, which
-# can occasionally be inconsistent mid-refactor on main; pass
-# --ksu-commit v4.2.0 (or whatever the latest tag is) for a
-# reproducible pin - see https://github.com/SukiSU-Ultra/SukiSU-Ultra/tags
+# KSU_COMMIT / SUSFS_COMMIT are set above from the command line. Empty
+# means "use the known-good pins from config.py" (resolved in build.py),
+# not "track upstream" - see the PINS note at the top of this file.
 # NOTE: there used to be an ALLOW_BAZEL flag here gating whether
 # Bazel/Kleaf-only branches (android15-6.6+, some newer android14-6.1
 # sub_levels) were allowed to build at all. Removed - kernel_builder.py
@@ -371,7 +374,6 @@ for key, entries in data.items():
         [ -n "$BLACKLIST_MODULES" ] && EXTRA_ARGS+=(--blacklist-modules "$BLACKLIST_MODULES")
         [ -n "$ATH9K" ] && EXTRA_ARGS+=(--ath9k)
         [ -n "$KSU_VERSION_CODE" ] && EXTRA_ARGS+=(--ksu-version-code "$KSU_VERSION_CODE")
-        [ -n "$DISABLE_SAFEMODE" ] && EXTRA_ARGS+=(--disable-safemode)
         [ -n "$USE_ZRAM" ] && EXTRA_ARGS+=(--zram)
         [ -z "$USE_MGLRU" ] && EXTRA_ARGS+=(--no-mglru)
         [ -z "$USE_PSI" ] && EXTRA_ARGS+=(--no-psi)
@@ -457,7 +459,6 @@ EXTRA_ARGS=()
 [ -n "$BLACKLIST_MODULES" ] && EXTRA_ARGS+=(--blacklist-modules "$BLACKLIST_MODULES")
 [ -n "$ATH9K" ] && EXTRA_ARGS+=(--ath9k)
 [ -n "$KSU_VERSION_CODE" ] && EXTRA_ARGS+=(--ksu-version-code "$KSU_VERSION_CODE")
-[ -n "$DISABLE_SAFEMODE" ] && EXTRA_ARGS+=(--disable-safemode)
 [ -n "$USE_ZRAM" ] && EXTRA_ARGS+=(--zram)
 [ -z "$USE_MGLRU" ] && EXTRA_ARGS+=(--no-mglru)
 [ -z "$USE_PSI" ] && EXTRA_ARGS+=(--no-psi)

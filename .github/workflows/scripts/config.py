@@ -95,8 +95,37 @@ ANDROID_KERNEL_MAP = {
 #   v4.0.0   -> 26 failed hunks
 #   builtin  -> 64 failed hunks   <- what we were building
 #
-# So: pin a real tag. Bump this deliberately, not accidentally.
-DEFAULT_KSU_REF = "v4.2.0"
+# So: pin a real ref. Bump this deliberately, not accidentally.
+#
+# ---- KNOWN-GOOD PINS: the single source of truth ------------------------
+# These three are what EVERY entry point builds when it isn't told
+# otherwise: ./build-kernel.sh with no pin flags, build.py, and both
+# GitHub Actions workflows with their pin inputs left empty. So a fresh
+# fork builds exactly what the latest release was built from.
+#
+# check-release.sh reads them to decide what's "new", and rewrites these
+# lines itself when you confirm a new build works (answer 1). Keep each on
+# ONE line in exactly this shape, or it can't find them.
+#
+# Why main and not a tag: SukiSU-Ultra main carries UAPI 4 (what the
+# current manager needs); the newest tag, v4.2.0, is still UAPI 2.
+#
+# DEFAULT_KSU_VERSION_CODE is only applied when the SukiSU ref IS
+# DEFAULT_KSU_REF - a version code belongs to one exact commit (see
+# _pin_ksu_version_code in kernel_builder.py). Any other --ksu-commit falls
+# back to SukiSU's live GitHub count unless --ksu-version-code is given.
+#
+# DEFAULT_SUSFS_PINS is per susfs4ksu branch (one branch per GKI version,
+# a hash is valid on exactly one). Branches not listed build from HEAD.
+# android13-5.15 is built, flashed and daily-driven; 6.1 / 6.6 are
+# verified to patch (incl. _recover_susfs_init_c) but not device-tested.
+DEFAULT_KSU_REF = "cf87e3f4ddd3f6e5464d85acf56aaa6950e70841"
+DEFAULT_KSU_VERSION_CODE = 40939
+DEFAULT_SUSFS_PINS = {
+    "gki-android13-5.15": "e565931d19256fd821ada01b35263506e7c7a364",
+    "gki-android14-6.1": "273ae364c5b7c92ceb15634c9f075b6fc0501048",
+    "gki-android15-6.6": "9d9464f191b2d846590ac4d1b52e123df135c401",
+}
 
 KSU_REPO_CONFIG = {"repo_url": "https://github.com/SukiSU-Ultra/SukiSU-Ultra.git",
                     "branch": "main",
@@ -179,7 +208,6 @@ class BuildConfig:
     custom_version: Optional[str] = None
     revision: Optional[str] = None
     kernel_tag: Optional[str] = None
-    disable_safemode: bool = False
     build_id: Optional[str] = None
     is_lts_build: bool = False
     # Whether to apply SukiSU_patch's 69_hide_stuff.patch (LineageOS/
@@ -287,7 +315,6 @@ class BuildConfig:
             "custom_version": self.custom_version,
             "revision": self.revision,
             "kernel_tag": self.kernel_tag,
-            "disable_safemode": self.disable_safemode,
             "build_id": self.build_id,
         }
 

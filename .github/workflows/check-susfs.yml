@@ -20,7 +20,7 @@ on:
   workflow_dispatch:
     inputs:
       susfs_pin:
-        description: 'Pin(s) to compare against. Bare ref, or per-branch: gki-android12-5.10=ec785f4,gki-android13-5.15=bca0d23. Leave empty to just report recent activity.'
+        description: 'Pin(s) to compare against. Leave empty for DEFAULT_SUSFS_PINS in config.py (what builds use). Bare ref, per-branch gki-android13-5.15=<hash>,..., or none to just report recent activity.'
         required: false
         type: string
         default: ''

@@ -40,11 +40,10 @@ PREFERRED_ORDER = list(DISPLAY_NAMES.keys())
 
 # Patch keys that are always written to PATCH_STATUS.json (so the raw
 # per-build JSON stays complete) but deliberately left out of the
-# aggregated CI summary table. safemode_disable: SukiSU-Ultra fixed the
-# underlying volume-key safe-mode bug upstream, so --disable-safemode is
-# off by default now and mostly just clutters the table with "-" - the
-# option itself still works fine if someone needs it again later.
-EXCLUDED_FROM_SUMMARY = {"safemode_disable"}
+# aggregated CI summary table. Empty for now (safemode_disable used to be
+# here; the option itself has since been removed - SukiSU-Ultra fixed the
+# volume-key safe-mode bug upstream).
+EXCLUDED_FROM_SUMMARY = set()
 
 
 def load_reports(results_dir: Path) -> list:

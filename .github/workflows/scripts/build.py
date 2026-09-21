@@ -9,7 +9,8 @@ from datetime import datetime
 
 sys.path.insert(0, str(Path(__file__).parent))
 
-from config import BuildConfig, AndroidVersion, KernelVersion, ANDROID_KERNEL_MAP, KSUVersion
+from config import (BuildConfig, AndroidVersion, KernelVersion, ANDROID_KERNEL_MAP, KSUVersion,
+                    DEFAULT_KSU_REF, DEFAULT_KSU_VERSION_CODE, DEFAULT_SUSFS_PINS)
 from kernel_builder import KernelBuilder, BuildResult
 
 logging.basicConfig(
@@ -37,14 +38,20 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--kernel", "-k", choices=[v.value for v in KernelVersion])
     parser.add_argument("--sub-level", "-s")
     parser.add_argument("--os-patch")
-    parser.add_argument("--ksu-version", choices=[v.value for v in KSUVersion], default=KSUVersion.STABLE.value)
-    parser.add_argument("--ksu-commit", default=None)
+    parser.add_argument("--ksu-version", choices=[v.value for v in KSUVersion], default=KSUVersion.STABLE.value,
+                        help="Label only (shown in the Telegram notification). "
+                             "Does not select any source - use --ksu-commit for that.")
+    parser.add_argument("--ksu-commit", default=None,
+                        help=f"SukiSU-Ultra tag/branch/commit. Default: the known-good "
+                             f"DEFAULT_KSU_REF in config.py ({DEFAULT_KSU_REF[:8]}). "
+                             f"Pass 'main' to track the moving branch.")
     parser.add_argument("--ksu-version-code", type=int, default=None,
-                        help="Pin the version number SukiSU reports (e.g. 40901). "
+                        help=f"Pin the version number SukiSU reports (e.g. {DEFAULT_KSU_VERSION_CODE}). "
                              "By default SukiSU's Kbuild curls GitHub for main's "
                              "live commit count, so the SAME source produces a "
                              "different number on different days - and the manager "
-                             "released with that source expects one exact value.")
+                             "expects one exact value. Defaults to "
+                             "DEFAULT_KSU_VERSION_CODE when building DEFAULT_KSU_REF.")
     parser.add_argument("--susfs-commit", default=None,
                         help="Pin susfs4ksu instead of tracking its branch HEAD. NOTE: "
                              "susfs4ksu keeps a SEPARATE BRANCH per GKI version "
@@ -55,8 +62,10 @@ def parse_args() -> argparse.Namespace:
                              "a mismatch is a hard error, not a silent wrong checkout), "
                              "'HEAD~N', or a per-branch map so one matrix run can pin "
                              "everything: "
-                             "--susfs-commit 'gki-android12-5.10=ec785f4,gki-android13-5.15=bca0d23'. "
-                             "Branches with no entry build from their branch HEAD.")
+                             "--susfs-commit 'gki-android12-5.10=ec785f4,gki-android13-5.15=e565931'. "
+                             "Branches with no entry build from their branch HEAD. "
+                             "Default: DEFAULT_SUSFS_PINS in config.py. Pass 'latest' "
+                             "to track every branch HEAD instead.")
     parser.add_argument("--zram", action="store_true")
     parser.add_argument("--no-kpm", action="store_true")
     parser.add_argument("--no-mglru", action="store_true",
@@ -129,9 +138,6 @@ def parse_args() -> argparse.Namespace:
                              "OR a raw commit SHA (7-40 hex chars, e.g. 12b3f6828b67824c794e422d5785dba6eb559bb2) "
                              "instead of the moving branch HEAD. A SHA is useful when an LTS-merge commit has "
                              "landed upstream but Google hasn't cut the official _r00 tag for it yet.")
-    parser.add_argument("--disable-safemode", action="store_true",
-                        help="Permanently disable KernelSU/SukiSU volume-key safe-mode detection "
-                             "(most users rely on Yet Another Bootloop Protector instead)")
     parser.add_argument("--lts", action="store_true",
                         help="Mark this build as sourced from an LTS-merge respin tag "
                              "(e.g. android13-5.15.209_r00) - adds a '-lts' marker to the "
@@ -146,16 +152,49 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
+def resolve_pins(args: argparse.Namespace):
+    """Fill in the known-good pins from config.py for anything not given.
+
+    Every entry point (build-kernel.sh, the Actions workflows, a bare
+    build.py) funnels through here, so an unpinned build is never a
+    "whatever upstream is today" build by accident.
+    """
+    ksu_ref = args.ksu_commit or DEFAULT_KSU_REF
+
+    code = args.ksu_version_code
+    if code is None and ksu_ref == DEFAULT_KSU_REF:
+        code = DEFAULT_KSU_VERSION_CODE
+    elif code is None:
+        logger.warning(
+            f"--ksu-commit {ksu_ref} is not the known-good DEFAULT_KSU_REF and no "
+            f"--ksu-version-code was given - SukiSU will report GitHub's live commit "
+            f"count, which may not match your manager.")
+
+    susfs = (args.susfs_commit or "").strip()
+    if not susfs:
+        susfs = ",".join(f"{b}={r}" for b, r in DEFAULT_SUSFS_PINS.items()) or None
+    elif susfs.lower() in ("latest", "head"):
+        susfs = None
+
+    logger.info(f"SukiSU-Ultra ref:  {ksu_ref}"
+                + (" (default, config.py)" if not args.ksu_commit else ""))
+    logger.info(f"KSU version code:  {code if code else 'live GitHub count'}")
+    logger.info(f"susfs pin(s):      {susfs or 'branch HEAD'}"
+                + (" (default, config.py)" if not args.susfs_commit else ""))
+    return ksu_ref, code, susfs
+
+
 def create_build_config(args: argparse.Namespace) -> BuildConfig:
+    ksu_ref, ksu_code, susfs_pin = resolve_pins(args)
     return BuildConfig(
         android_version=args.android or "android14",
         kernel_version=args.kernel or "6.1",
         sub_level=args.sub_level or "124",
         os_patch_level=args.os_patch or "2025-02",
         kernelsu_version=args.ksu_version,
-        kernelsu_commit=args.ksu_commit,
-        ksu_version_code=args.ksu_version_code,
-        susfs_commit=args.susfs_commit,
+        kernelsu_commit=ksu_ref,
+        ksu_version_code=ksu_code,
+        susfs_commit=susfs_pin,
         use_zram=args.zram,
         use_kpm=not args.no_kpm,
         use_mglru=not args.no_mglru,
@@ -176,7 +215,6 @@ def create_build_config(args: argparse.Namespace) -> BuildConfig:
         custom_version=args.custom_version,
         revision=args.revision,
         kernel_tag=args.kernel_tag,
-        disable_safemode=args.disable_safemode,
         is_lts_build=args.lts,
     )
 

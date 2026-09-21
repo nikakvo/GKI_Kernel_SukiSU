@@ -5,11 +5,9 @@ inputs:
   cache_path:
     description: 'Path where cache should be restored'
     required: true
-    type: string
   cache_key:
     description: 'Primary key to restore cache'
     required: true
-    type: string
   cache_bucket:
     description: 'The tag name for the release (e.g., general-cache)'
     required: false
