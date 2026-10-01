@@ -36,6 +36,10 @@ Builds on the work of others in the GKI/KernelSU ecosystem:
 
 Since forked, this repo has diverged significantly (exact GKI respin pinning including LTS-merge tags/commits, automatic matrix updates, local-build tooling, AVB signing, ath9k_htc adapter support) and is maintained as an independent project.
 
+## License
+
+This repository's own files are licensed under [GPL-3.0-or-later](LICENSE). Kernel patches, firmware and the released kernel images keep their own licenses (GPL-2.0 for anything that is part of the Linux kernel) — see [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
+
 ---
 
 ## Features & verification
