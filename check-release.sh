@@ -10,7 +10,11 @@
 #   3. applies 10_enable_susfs_for_ksu.patch FOR REAL in a throwaway worktree
 #      and runs the pipeline's own _recover_susfs_init_c() on it - so the
 #      verdict comes from the same code the build will run, not from counting
-#      hunks,
+#      hunks. If HEAD's KernelSU patch no longer fits SukiSU (upstream synced
+#      it to tiann/KernelSU), it tries the older versions of THAT ONE FILE and
+#      suggests a split pin "<HEAD>+<older>" - kernel-side fixes from HEAD,
+#      KernelSU wiring from the newest version that still fits - but only when
+#      the commits being skipped touched nothing except that patch file,
 #   4. prints the exact ./build-kernel.sh command to run,
 #   5. remembers that suggestion, and on the NEXT run asks whether you built,
 #      flashed and tested it - answer 1 and it updates the known-good pins
@@ -110,6 +114,20 @@ sync_repo() {   # $1=url $2=dir $3=label
 sync_repo "$SUKI_URL"  "$SUKI"  "SukiSU-Ultra" || exit 1
 sync_repo "$SUSFS_URL" "$SUSFS" "susfs4ksu"    || exit 1
 
+sha_of()   { git -C "$1" rev-parse -q --verify "$2^{commit}" 2>/dev/null; }
+
+# A susfs pin is either "<sha>" or the split form "<kernel-side>+<KernelSU-patch>"
+# (kernel_builder.py: _split_susfs_ref). These keep both forms comparable.
+susfs_k()     { printf '%s' "${1%%+*}"; }                           # kernel-side part
+susfs_p()     { case "$1" in *+*) printf '%s' "${1#*+}" ;; esac; }  # patch part or ""
+norm_susfs() {  # both parts as full SHAs
+    local k p
+    [ -n "$1" ] || return 0
+    k="$(sha_of "$SUSFS" "$(susfs_k "$1")")"; p="$(susfs_p "$1")"
+    if [ -n "$p" ]; then printf '%s+%s' "$k" "$(sha_of "$SUSFS" "$p")"; else printf '%s' "$k"; fi
+}
+short_susfs() { local p; p="$(susfs_p "$1")"; printf '%s' "${1:0:8}${p:+"+${p:0:8}"}"; }
+
 # ---- 0. follow-up on the build suggested last time ---------------------------
 # When the script prints "Build this:" it saves that exact combination here.
 # Next run it asks about THAT combination - not whatever upstream has moved to
@@ -137,7 +155,7 @@ if branch == "gki-android13-5.15":
     s = sub1(r'^DEFAULT_KSU_REF = "[^"]*"', f'DEFAULT_KSU_REF = "{ksu}"', s)
     s = sub1(r'^DEFAULT_KSU_VERSION_CODE = \d+', f'DEFAULT_KSU_VERSION_CODE = {code}', s)
 
-line = re.compile(r'^(\s*)"' + re.escape(branch) + r'": "[0-9a-f]*",', re.M)
+line = re.compile(r'^(\s*)"' + re.escape(branch) + r'": "[0-9a-f+]*",', re.M)
 if line.search(s):
     s = line.sub(lambda m: f'{m.group(1)}"{branch}": "{susfs}",', s, count=1)
 else:   # branch not pinned yet: add it before the closing brace of the dict
@@ -163,12 +181,12 @@ PY
 if [ -s "$PENDING" ]; then
     read -r P_KSU P_SUSFS P_CODE P_DATE < "$PENDING"
     PIN_NOW="$(git -C "$SUKI" rev-parse -q --verify "$PINNED_KSU_REF^{commit}" 2>/dev/null)"
-    if [ "$P_KSU" = "$PIN_NOW" ] && [ "$P_SUSFS" = "${PINNED_SUSFS[$BRANCH]:-}" ]; then
+    if [ "$P_KSU" = "$PIN_NOW" ] && [ "$P_SUSFS" = "$(norm_susfs "${PINNED_SUSFS[$BRANCH]:-}")" ]; then
         rm -f "$PENDING"          # already saved (e.g. by hand)
     elif [ "$ASK" = 1 ] && [ -t 0 ]; then
         hdr "Last suggested build ($P_DATE)"
         echo "  SukiSU  ${P_KSU:0:8}   version $P_CODE"
-        echo "  susfs   ${P_SUSFS:0:8}   ($BRANCH)"
+        echo "  susfs   $(short_susfs "$P_SUSFS")   ($BRANCH)"
         echo
         echo "  Did you build, flash and test it?"
         echo "    1) Yes, it works  - save it as the new known-good build"
@@ -202,8 +220,6 @@ uapi_of() {     # $1=ref -> number or nothing
     git -C "$SUKI" show "$1:uapi/supercall.h" 2>/dev/null \
         | grep -m1 -oE "KERNEL_SU_UAPI_VERSION = [0-9]+" | grep -oE "[0-9]+$"
 }
-sha_of()   { git -C "$1" rev-parse -q --verify "$2^{commit}" 2>/dev/null; }
-
 version_code_of() {   # $1=sha -> same formula as kernel/Kbuild and the manager
     local kb base off count
     kb="$(git -C "$SUKI" show "$1:kernel/Kbuild" 2>/dev/null)"
@@ -259,52 +275,58 @@ fi
 # ---- 2. susfs ----------------------------------------------------------------
 hdr "susfs4ksu ($BRANCH)"
 SUSFS_PIN="${PINNED_SUSFS[$BRANCH]:-}"
+SUSFS_PIN_FULL="$(norm_susfs "$SUSFS_PIN")"
+SUSFS_PIN_K="$(susfs_k "$SUSFS_PIN_FULL")"
 SUSFS_HEAD="$(sha_of "$SUSFS" "origin/$BRANCH")"
 [ -n "$SUSFS_HEAD" ] || { bad "branch $BRANCH does not exist on $SUSFS_URL"; exit 1; }
-SUSFS_NEW=0
 if [ -z "$SUSFS_PIN" ]; then
-    SUSFS_NEW=1
     echo "  HEAD   ${SUSFS_HEAD:0:8}  (no known-good pin for this branch in config.py yet)"
-elif [ "$SUSFS_HEAD" != "$(sha_of "$SUSFS" "$SUSFS_PIN")" ]; then
-    SUSFS_NEW=1
-    echo "  built  ${SUSFS_PIN:0:8}"
-    echo "  HEAD   ${SUSFS_HEAD:0:8}  ($(git -C "$SUSFS" rev-list --count "$SUSFS_PIN..$SUSFS_HEAD" 2>/dev/null || echo '?') new):"
-    git -C "$SUSFS" log --oneline --no-decorate "$SUSFS_PIN..$SUSFS_HEAD" 2>/dev/null \
+elif [ "$SUSFS_HEAD" != "$SUSFS_PIN_K" ]; then
+    echo "  built  $(short_susfs "$SUSFS_PIN_FULL")"
+    echo "  HEAD   ${SUSFS_HEAD:0:8}  ($(git -C "$SUSFS" rev-list --count "$SUSFS_PIN_K..$SUSFS_HEAD" 2>/dev/null || echo '?') new):"
+    git -C "$SUSFS" log --oneline --no-decorate "$SUSFS_PIN_K..$SUSFS_HEAD" 2>/dev/null \
         | head -n 15 | sed 's/^/      /'
 else
     echo "  HEAD   ${SUSFS_HEAD:0:8}  (same as last build)"
 fi
 
 # ---- 3. the real test: apply + run the pipeline's own recovery ---------------
-hdr "Patch test: ${CAND_LABEL} ${CAND_SHA:0:8} + susfs ${SUSFS_HEAD:0:8}"
+KSU_PATCH_REL="kernel_patches/KernelSU/10_enable_susfs_for_ksu.patch"
 
-WORKTREE="$(mktemp -d)"
+WORKTREE=""
 PATCHFILE="$(mktemp)"
-cleanup() {
-    git -C "$SUKI" worktree remove --force "$WORKTREE" >/dev/null 2>&1
-    rm -rf "$WORKTREE" "$PATCHFILE"
+drop_worktree() {
+    if [ -n "$WORKTREE" ]; then
+        git -C "$SUKI" worktree remove --force "$WORKTREE" >/dev/null 2>&1
+        rm -rf "$WORKTREE"
+        WORKTREE=""
+    fi
 }
+cleanup() { drop_worktree; rm -f "$PATCHFILE"; }
 trap cleanup EXIT
 
-VERDICT="STOP"; DETAIL=""
-if ! git -C "$SUSFS" show \
-    "$SUSFS_HEAD:kernel_patches/KernelSU/10_enable_susfs_for_ksu.patch" > "$PATCHFILE" 2>/dev/null; then
-    DETAIL="10_enable_susfs_for_ksu.patch not found in susfs ${SUSFS_HEAD:0:8}"
-else
-    rm -rf "$WORKTREE"
+# patch_test <susfs ref to take the KernelSU patch from>  -> sets VERDICT, DETAIL
+patch_test() {
+    local ref="$1" out rc failed_files n_failed rec left rej
+    VERDICT="STOP"; DETAIL=""
+    drop_worktree
+    if ! git -C "$SUSFS" show "$ref:$KSU_PATCH_REL" > "$PATCHFILE" 2>/dev/null; then
+        DETAIL="10_enable_susfs_for_ksu.patch not found in susfs ${ref:0:8}"; return
+    fi
+    WORKTREE="$(mktemp -d)"; rm -rf "$WORKTREE"
     if ! git -C "$SUKI" worktree add -q --detach "$WORKTREE" "$CAND_SHA" >/dev/null 2>&1; then
-        DETAIL="cannot check out SukiSU ${CAND_SHA:0:8}"
-    else
-        out="$(cd "$WORKTREE" && patch -p1 --fuzz=3 < "$PATCHFILE" 2>&1)"; rc=$?
-        failed_files="$(printf '%s\n' "$out" \
-            | awk '/^patching file /{f=$3} /FAILED/{if(f!=""){print f; f=""}}' \
-            | sort -u | tr '\n' ' ')"
-        n_failed="$(printf '%s\n' "$out" | grep -cE '^Hunk.*FAILED' || true)"
-        if [ "$rc" -eq 0 ]; then
-            VERDICT="CLEAN"; DETAIL="patch applies fully - no recovery needed"
-        else
-            echo "  $n_failed hunk(s) failed in: ${failed_files:-?}"
-            rec="$(cd "$BUILDER_DIR" && python3 - "$WORKTREE" 2>/dev/null <<'PY'
+        DETAIL="cannot check out SukiSU ${CAND_SHA:0:8}"; return
+    fi
+    out="$(cd "$WORKTREE" && patch -p1 --fuzz=3 < "$PATCHFILE" 2>&1)"; rc=$?
+    failed_files="$(printf '%s\n' "$out" \
+        | awk '/^patching file /{f=$3} /FAILED/{if(f!=""){print f; f=""}}' \
+        | sort -u | tr '\n' ' ')"
+    n_failed="$(printf '%s\n' "$out" | grep -cE '^Hunk.*FAILED' || true)"
+    if [ "$rc" -eq 0 ]; then
+        VERDICT="CLEAN"; DETAIL="patch applies fully - no recovery needed"; return
+    fi
+    echo "  $n_failed hunk(s) failed in: ${failed_files:-?}"
+    rec="$(cd "$BUILDER_DIR" && python3 - "$WORKTREE" 2>/dev/null <<'PY'
 import sys, logging
 logging.disable(logging.CRITICAL)
 sys.path.insert(0, '.')
@@ -314,30 +336,73 @@ b = object.__new__(kb.KernelBuilder)
 print("RECOVERY=" + ("True" if kb.KernelBuilder._recover_susfs_init_c(b, Path(sys.argv[1])) else "False"))
 PY
 )"
-            # kernel_builder prints things on import - keep only our marker line
-            rec="$(printf '%s\n' "$rec" | grep -m1 '^RECOVERY=' | cut -d= -f2)"
-            if [ "$rec" = "True" ]; then
-                left="$(grep -rn --include='*.c' --include='*.h' ksu_late_loaded "$WORKTREE/kernel" 2>/dev/null | grep -vc '\.orig' || true)"
-                rej="$(find "$WORKTREE" -name '*.rej' | wc -l)"
-                if [ "$left" = "0" ] && [ "$rej" = "0" ]; then
-                    VERDICT="RECOVERED"
-                    DETAIL="_recover_susfs_init_c fixed it (same code the build runs)"
-                else
-                    DETAIL="recovery ran but left $left ksu_late_loaded ref(s) / $rej .rej file(s)"
-                fi
-            elif [ "$rec" = "False" ]; then
-                DETAIL="_recover_susfs_init_c could not handle this - upstream changed something new"
-            else
-                DETAIL="could not run kernel_builder.py (python error)"
-            fi
+    # kernel_builder prints things on import - keep only our marker line
+    rec="$(printf '%s\n' "$rec" | grep -m1 '^RECOVERY=' | cut -d= -f2)"
+    if [ "$rec" = "True" ]; then
+        left="$(grep -rn --include='*.c' --include='*.h' ksu_late_loaded "$WORKTREE/kernel" 2>/dev/null | grep -vc '\.orig' || true)"
+        rej="$(find "$WORKTREE" -name '*.rej' | wc -l)"
+        if [ "$left" = "0" ] && [ "$rej" = "0" ]; then
+            VERDICT="RECOVERED"
+            DETAIL="_recover_susfs_init_c fixed it (same code the build runs)"
+        else
+            DETAIL="recovery ran but left $left ksu_late_loaded ref(s) / $rej .rej file(s)"
         fi
+    elif [ "$rec" = "False" ]; then
+        DETAIL="_recover_susfs_init_c could not handle this - upstream changed something new"
+    else
+        DETAIL="could not run kernel_builder.py (python error)"
     fi
-fi
+}
 
+hdr "Patch test: ${CAND_LABEL} ${CAND_SHA:0:8} + susfs ${SUSFS_HEAD:0:8}"
+SUSFS_USE="$SUSFS_HEAD"
+patch_test "$SUSFS_HEAD"
 case "$VERDICT" in
     CLEAN|RECOVERED) ok "$DETAIL" ;;
     *)               bad "$DETAIL" ;;
 esac
+
+# ---- 3b. fallback: older KernelSU patch + HEAD's kernel side -----------------
+# susfs upstream sometimes rewrites ONLY the KernelSU patch for tiann/KernelSU
+# (e.g. 0c82f6e "Sync with the official KernelSU main repo"), so it stops
+# fitting SukiSU, while later commits fix the kernel side only. Walk back
+# through the versions of that one file and take the newest that fits - but
+# stop at any commit that changed the KernelSU patch AND something else: that
+# is a paired API change and must not be split.
+if [ "$VERDICT" = "STOP" ]; then
+    mapfile -t KSU_CHANGES < <(git -C "$SUSFS" log --format=%H "$SUSFS_HEAD" -- "$KSU_PATCH_REL" 2>/dev/null | head -n 6)
+    skipped=()
+    for ((i = 0; i + 1 < ${#KSU_CHANGES[@]}; i++)); do
+        c="${KSU_CHANGES[$i]}"
+        other="$(git -C "$SUSFS" show --name-only --format= "$c" | grep -vxF "$KSU_PATCH_REL" | grep -c . || true)"
+        if [ "$other" != "0" ]; then
+            echo
+            bad "susfs $(git -C "$SUSFS" log -1 --format='%h "%s"' "$c")"
+            echo "        changes the KernelSU patch AND the kernel side together - not safe to split."
+            break
+        fi
+        skipped+=("$c")
+        cand="$(sha_of "$SUSFS" "$c^")"     # last commit with the version before $c
+        hdr "Fallback: ${CAND_LABEL} ${CAND_SHA:0:8} + KernelSU patch from susfs ${cand:0:8}"
+        patch_test "$cand"
+        if [ "$VERDICT" = "CLEAN" ] || [ "$VERDICT" = "RECOVERED" ]; then
+            ok "$DETAIL"
+            SUSFS_USE="$SUSFS_HEAD+$cand"
+            echo
+            echo "  Split pin: kernel side from susfs ${B}${SUSFS_HEAD:0:8}${N} (HEAD),"
+            echo "             KernelSU patch from susfs ${B}${cand:0:8}${N}."
+            echo "  Leaving out these KernelSU-patch-only change(s), which don't fit SukiSU:"
+            for x in "${skipped[@]}"; do
+                git -C "$SUSFS" log -1 --format='      %h %s' "$x"
+            done
+            break
+        fi
+        bad "$DETAIL"
+    done
+fi
+
+SUSFS_NEW=0
+[ "$SUSFS_USE" != "$SUSFS_PIN_FULL" ] && SUSFS_NEW=1
 
 # ---- verdict + command -------------------------------------------------------
 hdr "What to do"
@@ -347,9 +412,9 @@ case "$BRANCH" in
     *)                  EXTRA="--no-ath9k "; MENU="menu option 2 (Custom), values from matrix.json" ;;
 esac
 
-if [ "$VERDICT" != "STOP" ] && grep -q "^$CAND_SHA $SUSFS_HEAD " "$BROKEN" 2>/dev/null; then
+if [ "$VERDICT" != "STOP" ] && grep -qF "$CAND_SHA $SUSFS_USE " "$BROKEN" 2>/dev/null; then
     VERDICT="STOP"
-    bad "You marked SukiSU ${CAND_SHA:0:8} + susfs ${SUSFS_HEAD:0:8} as broken earlier."
+    bad "You marked SukiSU ${CAND_SHA:0:8} + susfs $(short_susfs "$SUSFS_USE") as broken earlier."
     echo "        Waiting for a newer commit. To allow it again, delete its line in:"
     echo "        $BROKEN"
     echo
@@ -366,7 +431,7 @@ if [ "$VERDICT" = "STOP" ]; then
 fi
 
 if [ "$KSU_NEW" = 0 ] && [ "$SUSFS_NEW" = 0 ]; then
-    ok "Nothing new since the last build (${PIN_SHA:0:8} / ${SUSFS_HEAD:0:8}). You're up to date."
+    ok "Nothing new since the last build (${PIN_SHA:0:8} / $(short_susfs "$SUSFS_USE")). You're up to date."
     echo
     echo "  Rebuild command, if you need it (new kernel sub_level etc.):"
 else
@@ -380,14 +445,14 @@ fi
 
 echo
 echo "  ${C}./build-kernel.sh ${EXTRA}--ksu-commit $CAND_SHA \\"
-echo "    --susfs-commit $SUSFS_HEAD \\"
+echo "    --susfs-commit $SUSFS_USE \\"
 echo "    --ksu-version-code $CAND_CODE${N}"
 echo
 echo "  $MENU"
 
 if [ "$KSU_NEW" = 1 ] || [ "$SUSFS_NEW" = 1 ]; then
     [ "$CAND_CODE" != "<manager version>" ] && \
-        echo "$CAND_SHA $SUSFS_HEAD $CAND_CODE $(date +%F)" > "$PENDING"
+        echo "$CAND_SHA $SUSFS_USE $CAND_CODE $(date +%F)" > "$PENDING"
     echo
     echo "  Before flashing:"
     echo "   1. Manager: install the SukiSU CI build for commit ${CAND_SHA:0:8} and"

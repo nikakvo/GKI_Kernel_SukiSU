@@ -18,10 +18,23 @@ repo remains the source of truth. This script does NOT touch the
 only within the --months lookback window (default 24) to avoid the
 matrix growing back to 2021.
 
+Untagged LTS sub_levels: Google merges new upstream -stable releases
+into the android*-lts branches (e.g. android13-5.15-lts) days or weeks
+before it cuts the matching _r00 tag - and some sub_levels never get a
+tag at all. For every sub_level on that branch NEWER than the highest
+officially tagged one, this script adds an entry pinned to a commit SHA
+(the branch's last commit while SUBLEVEL was that number - i.e. the LTS
+merge plus any ANDROID: fixups that followed it). kernel_builder.py
+already accepts a SHA as kernel_tag. Once Google publishes the real
+_r00 tag for that sub_level, the entry is upgraded to it automatically.
+This uses a small local partial clone (commits + trees, no file
+contents) in .ack-cache/ next to this script, refreshed on every run.
+
 Usage:
     python3 update_matrix.py                 # update in place, last 24 months
     python3 update_matrix.py --dry-run        # only print what would change
     python3 update_matrix.py --months 12      # narrower lookback window
+    python3 update_matrix.py --no-untagged    # skip the -lts branch SHA scan
 """
 import subprocess
 import re
@@ -32,7 +45,7 @@ import base64
 import urllib.request
 import urllib.error
 from pathlib import Path
-from datetime import date
+from datetime import date, timedelta
 from collections import defaultdict
 
 REMOTE = "https://android.googlesource.com/kernel/common"
@@ -86,6 +99,14 @@ def is_lts_style_tag(kernel_tag: str) -> bool:
 # (android, kernel) - keeps a fresh run from importing years of LTS
 # history as a wall of "+ NEW" entries.
 DOT_KEEP_LATEST_N = 15
+
+# --- untagged LTS sub_levels (pinned by commit SHA) ---
+# Local partial clone used to walk the android*-lts branches. Add
+# ".ack-cache/" to .gitignore.
+LTS_CACHE_DIR = Path(__file__).resolve().parent / ".ack-cache"
+# How far back to fetch -lts branch history. Only needs to reach past the
+# newest officially tagged sub_level; ~8 months is plenty.
+LTS_LOOKBACK_DAYS = 240
 
 REQUEST_DELAY = 0.4          # seconds between Makefile fetches - avoids 429
 MAX_RETRIES = 5
@@ -203,6 +224,84 @@ def fetch_sub_level(tag: str) -> str | None:
     return m.group(1)
 
 
+def _cache_git(*args, timeout=300) -> str:
+    return subprocess.run(
+        ["git", "-C", str(LTS_CACHE_DIR), *args],
+        capture_output=True, text=True, check=True, timeout=timeout,
+    ).stdout
+
+
+def fetch_lts_heads() -> set[str]:
+    """Names of all android*-lts branches on kernel/common."""
+    result = subprocess.run(
+        ["git", "ls-remote", "--heads", REMOTE],
+        capture_output=True, text=True, check=True, timeout=120,
+    )
+    heads = set()
+    for line in result.stdout.splitlines():
+        if "refs/heads/" not in line:
+            continue
+        name = line.split("refs/heads/", 1)[1]
+        if name.endswith("-lts"):
+            heads.add(name)
+    return heads
+
+
+def _ensure_lts_cache():
+    if (LTS_CACHE_DIR / "HEAD").exists():
+        return
+    LTS_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+    subprocess.run(["git", "init", "--bare", "-q", str(LTS_CACHE_DIR)], check=True)
+    _cache_git("remote", "add", "origin", REMOTE)
+    # Partial clone: commits + trees only, file contents fetched lazily
+    # (only the Makefile of a handful of commits is ever read).
+    _cache_git("config", "remote.origin.promisor", "true")
+    _cache_git("config", "remote.origin.partialclonefilter", "blob:none")
+
+
+def find_untagged_lts_sublevels(branch: str) -> dict[str, str]:
+    """{sub_level: tip_sha} for every SUBLEVEL seen on the first-parent
+    history of `branch` within LTS_LOOKBACK_DAYS. tip_sha is the LAST
+    commit on the branch while SUBLEVEL had that value (the commit just
+    before the next LTS merge, or the branch head for the newest one)."""
+    _ensure_lts_cache()
+    since = (date.today() - timedelta(days=LTS_LOOKBACK_DAYS)).isoformat()
+    print(f"Fetching {branch} history since {since} into {LTS_CACHE_DIR.name}/ ...")
+    _cache_git(
+        "fetch", "-q", "--filter=blob:none", f"--shallow-since={since}",
+        "origin", f"+refs/heads/{branch}:refs/heads/{branch}",
+        timeout=1800,
+    )
+
+    # First-parent commits where Makefile differs from their first parent:
+    # LTS merges (SUBLEVEL bump) plus the odd ANDROID: Makefile change.
+    shas = _cache_git(
+        "log", "--first-parent", "--reverse", "--format=%H",
+        f"refs/heads/{branch}", "--", "Makefile",
+    ).split()
+
+    transitions = []  # [(first_sha_with_this_sublevel, sub_level)], oldest first
+    for sha in shas:
+        makefile = _cache_git("cat-file", "-p", f"{sha}:Makefile")
+        m = re.search(r'^SUBLEVEL\s*=\s*(\d+)', makefile, re.MULTILINE)
+        if not m:
+            continue
+        sub = m.group(1)
+        if transitions and transitions[-1][1] == sub:
+            continue
+        transitions.append((sha, sub))
+
+    head = _cache_git("rev-parse", f"refs/heads/{branch}").strip()
+    result = {}
+    for i, (_sha, sub) in enumerate(transitions):
+        if i + 1 < len(transitions):
+            tip = _cache_git("rev-parse", f"{transitions[i + 1][0]}^1").strip()
+        else:
+            tip = head
+        result[sub] = tip
+    return result
+
+
 def load_matrix() -> dict:
     if MATRIX_FILE.exists():
         with open(MATRIX_FILE, "r", encoding="utf-8") as f:
@@ -246,6 +345,7 @@ def write_matrix_compact(matrix: dict, path: Path):
 
 def main():
     dry_run = "--dry-run" in sys.argv
+    scan_untagged = "--no-untagged" not in sys.argv
     months = 24
     if "--months" in sys.argv:
         idx = sys.argv.index("--months")
@@ -258,6 +358,13 @@ def main():
 
     changes = []
     warnings = []
+
+    lts_heads = set()
+    if scan_untagged:
+        try:
+            lts_heads = fetch_lts_heads()
+        except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as e:
+            warnings.append(f"untagged LTS scan skipped - could not list -lts branches: {e}")
 
     for android, kernel in TRACKED.items():
         matrix_key = f"{android}-{kernel}"
@@ -348,6 +455,67 @@ def main():
                     )
                     existing["kernel_tag"] = tag
                 if not existing.get("lts"):
+                    existing["lts"] = True
+
+        # --- untagged sub_levels on the -lts branch (pinned by SHA) ---
+        lts_branch = f"{android}-{kernel}-lts"
+        if lts_branch in lts_heads:
+            tagged_subs = [int(s) for s in latest_lts.get((android, kernel), {})]
+            tagged_subs += [int(e["sub_level"]) for e in entries
+                            if DOT_TAG_RE.match(e.get("kernel_tag", ""))]
+            max_tagged = max(tagged_subs, default=0)
+            try:
+                untagged = find_untagged_lts_sublevels(lts_branch)
+            except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as e:
+                stderr = getattr(e, "stderr", "") or ""
+                warnings.append(f"{matrix_key}: untagged LTS scan failed ({e}) {stderr.strip()}")
+                untagged = {}
+
+            for sub_level, sha in sorted(untagged.items(), key=lambda kv: int(kv[0])):
+                if int(sub_level) <= max_tagged:
+                    continue  # official tags cover this range
+                print(f"{matrix_key} / sub_level {sub_level} (LTS, untagged): {lts_branch} @ {sha[:12]}")
+                existing = dot_by_sub.get(sub_level)
+                if existing is None:
+                    if fallback_patch is None:
+                        warnings.append(
+                            f"{matrix_key} sub_level {sub_level} (untagged): skipped adding - "
+                            f"no os_patch_level could be inferred; add it manually"
+                        )
+                        continue
+                    new_entry = {
+                        "sub_level": sub_level,
+                        "os_patch_level": fallback_patch,
+                        "kernel_tag": sha,
+                        "enabled": False,
+                        "lts": True,
+                    }
+                    entries.append(new_entry)
+                    dot_by_sub[sub_level] = new_entry
+                    changes.append(
+                        f"+ NEW: {matrix_key} sub_level {sub_level} (LTS, untagged) -> "
+                        f"commit {sha[:12]} (enabled: false)"
+                    )
+                    continue
+
+                old_tag = existing.get("kernel_tag", "")
+                if DOT_TAG_RE.match(old_tag):
+                    continue  # already on an official tag - that always wins
+                if sha.lower().startswith(old_tag.lower()):
+                    continue  # same commit (possibly pinned as a short SHA)
+                if existing.get("enabled"):
+                    # Don't silently move something you've opted into building.
+                    warnings.append(
+                        f"{matrix_key} sub_level {sub_level}: enabled and pinned to {old_tag[:12]}, "
+                        f"but {lts_branch} now has newer commits for this sub_level "
+                        f"(tip {sha[:12]}) - left unchanged, update manually if wanted"
+                    )
+                else:
+                    changes.append(
+                        f"~ UPDATED: {matrix_key} sub_level {sub_level} (LTS, untagged): "
+                        f"commit {old_tag[:12]}->{sha[:12]} (enabled stays: False)"
+                    )
+                    existing["kernel_tag"] = sha
                     existing["lts"] = True
 
         entries.sort(key=lambda e: (e["os_patch_level"], int(e["sub_level"]) if str(e["sub_level"]).isdigit() else 0))

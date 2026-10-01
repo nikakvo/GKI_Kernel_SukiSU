@@ -289,6 +289,9 @@ CONFIG_CIFS_XATTR=y
         self.work_dir = self.workspace / config.config_name
         self.work_dir.mkdir(parents=True, exist_ok=True)
         self.susfs_dir = self.workspace / "susfs4ksu"
+        # Set by _apply_susfs_commit() when the susfs pin has the split
+        # form "<kernel-ref>+<ksu-patch-ref>" - see _split_susfs_ref().
+        self.susfs_ksu_patch_ref = None
         self.sukisu_patch_dir = self.workspace / "SukiSU_patch"
         self.anykernel_dir = self.workspace / "AnyKernel3"
         self.kernel_patches_dir = self.workspace / "kernel_patches"
@@ -380,6 +383,17 @@ CONFIG_CIFS_XATTR=y
                             listed build from their branch HEAD. This is
                             what makes one matrix run able to pin every
                             branch at once.
+
+          split ref         e.g. 687d2d1+e565931 (also inside a map:
+                            gki-android13-5.15=687d2d1+e565931)
+                            kernel side (50_add_susfs patch, fs/susfs.c,
+                            susfs.h) from the first ref, KernelSU side
+                            (KernelSU/10_enable_susfs_for_ksu.patch)
+                            from the second. For when upstream rewrites
+                            the KernelSU patch for tiann/KernelSU and it
+                            stops fitting SukiSU, while the kernel-side
+                            fixes after it are still wanted. Both refs
+                            must be on this build's susfs branch.
         """
         raw = (self.config.susfs_commit or "").strip()
         if not raw:
@@ -411,12 +425,72 @@ CONFIG_CIFS_XATTR=y
             )
         return ref
 
+    @staticmethod
+    def _split_susfs_ref(ref: str) -> tuple:
+        """'687d2d1+e565931' -> ('687d2d1', 'e565931'); 'abc' -> ('abc', None)."""
+        kernel_ref, sep, ksu_ref = ref.partition("+")
+        kernel_ref, ksu_ref = kernel_ref.strip(), ksu_ref.strip()
+        if sep and (not kernel_ref or not ksu_ref or "+" in ksu_ref):
+            raise RuntimeError(
+                f"Could not parse --susfs-commit '{ref}'. The split form is "
+                f"<kernel-side ref>+<KernelSU-patch ref>, e.g. 687d2d1+e565931."
+            )
+        return kernel_ref, (ksu_ref or None)
+
+    def _resolve_susfs_ref_on_branch(self, pin: str, what: str) -> str:
+        """rev-parse `pin` in the susfs checkout (cwd) and make sure it is
+        on this build's susfs branch. Returns the full SHA."""
+        branch = self.config.kernel_branch
+        resolved = self._run_cmd(f"git rev-parse --verify '{pin}^{{commit}}'",
+                                 check=False, capture_output=True)
+        if resolved.returncode != 0:
+            raise RuntimeError(
+                f"--susfs-commit {what} '{pin}' does not resolve to a commit in "
+                f"susfs4ksu ({self.susfs_dir}). Check the hash."
+            )
+        sha = (resolved.stdout or "").strip()
+
+        on_branch = self._run_cmd(f"git merge-base --is-ancestor {sha} origin/{branch}",
+                                  check=False, capture_output=True)
+        if on_branch.returncode != 0:
+            owners = self._run_cmd(
+                f"git branch -r --contains {sha} --format='%(refname:short)'",
+                check=False, capture_output=True,
+            )
+            owner_list = [
+                l.strip() for l in (owners.stdout or "").splitlines()
+                if l.strip() and "->" not in l
+            ]
+            where = (f"That commit is on: {', '.join(owner_list)}."
+                     if owner_list else
+                     "Could not determine which branch that commit belongs to.")
+            raise RuntimeError(
+                f"--susfs-commit '{pin}' is not on susfs4ksu's "
+                f"'{branch}' branch, which is the branch this "
+                f"{self.config.android_version}-{self.config.kernel_version} "
+                f"build needs.\n"
+                f"{where}\n"
+                f"susfs4ksu keeps one branch per GKI version and each holds "
+                f"only its own 50_add_susfs_in_gki-*.patch, so a commit hash "
+                f"is valid for exactly one branch. Checking this one out "
+                f"anyway would produce a tree with the wrong SUSFS patch in "
+                f"it, so the build stops here instead.\n"
+                f"Either pass the equivalent commit on '{branch}', or use "
+                f"the per-branch form to cover several branches in one run:\n"
+                f"  --susfs-commit '{branch}=<ref>,gki-android13-5.15=<ref>'\n"
+                f"Browse the branch at: "
+                f"https://github.com/ShirkNeko/susfs4ksu/commits/{branch}"
+            )
+
+        return sha
+
     def _apply_susfs_commit(self):
         if not self.susfs_dir.exists():
             return
         pin = self._resolve_susfs_pin()
         if not pin:
             return
+        kernel_pin, ksu_pin = self._split_susfs_ref(pin)
 
         branch = self.config.kernel_branch
         prev_cwd = self.shell.cwd
@@ -424,57 +498,34 @@ CONFIG_CIFS_XATTR=y
         try:
             self._run_cmd("git fetch origin", check=False)
 
-            if pin.startswith("HEAD~"):
+            if kernel_pin.startswith("HEAD~"):
                 # Relative to the branch that was just checked out by
                 # clone_repositories(), so it is branch-correct by
                 # construction - nothing to validate.
-                self._run_cmd(f"git reset --hard {pin}", check=False)
-                logger.info(f"susfs4ksu pinned to {pin} on {branch}")
-                return
+                self._run_cmd(f"git reset --hard {kernel_pin}", check=False)
+                logger.info(f"susfs4ksu pinned to {kernel_pin} on {branch}")
+            else:
+                sha = self._resolve_susfs_ref_on_branch(kernel_pin, "ref")
+                self._run_cmd(f"git checkout {sha}", check=False)
+                logger.info(f"susfs4ksu pinned to {sha[:12]} on {branch}")
 
-            resolved = self._run_cmd(f"git rev-parse --verify '{pin}^{{commit}}'",
-                                     check=False, capture_output=True)
-            if resolved.returncode != 0:
-                raise RuntimeError(
-                    f"--susfs-commit '{pin}' does not resolve to a commit in "
-                    f"susfs4ksu ({self.susfs_dir}). Check the hash."
+            if ksu_pin:
+                # Resolved AFTER the checkout above, so a HEAD~N here is
+                # relative to the pinned kernel-side commit.
+                ksu_sha = self._resolve_susfs_ref_on_branch(ksu_pin, "KernelSU-patch ref")
+                rel = "kernel_patches/KernelSU/10_enable_susfs_for_ksu.patch"
+                has = self._run_cmd(f"git cat-file -e {ksu_sha}:{rel}",
+                                    check=False, capture_output=True)
+                if has.returncode != 0:
+                    raise RuntimeError(
+                        f"susfs4ksu {ksu_sha[:12]} has no {rel} - cannot take the "
+                        f"KernelSU patch from it."
+                    )
+                self.susfs_ksu_patch_ref = ksu_sha
+                logger.info(
+                    f"susfs4ksu split pin: kernel side from the commit above, "
+                    f"KernelSU/10_enable_susfs_for_ksu.patch from {ksu_sha[:12]}"
                 )
-            sha = (resolved.stdout or "").strip()
-
-            on_branch = self._run_cmd(f"git merge-base --is-ancestor {sha} origin/{branch}",
-                                      check=False, capture_output=True)
-            if on_branch.returncode != 0:
-                owners = self._run_cmd(
-                    f"git branch -r --contains {sha} --format='%(refname:short)'",
-                    check=False, capture_output=True,
-                )
-                owner_list = [
-                    l.strip() for l in (owners.stdout or "").splitlines()
-                    if l.strip() and "->" not in l
-                ]
-                where = (f"That commit is on: {', '.join(owner_list)}."
-                         if owner_list else
-                         "Could not determine which branch that commit belongs to.")
-                raise RuntimeError(
-                    f"--susfs-commit '{pin}' is not on susfs4ksu's "
-                    f"'{branch}' branch, which is the branch this "
-                    f"{self.config.android_version}-{self.config.kernel_version} "
-                    f"build needs.\n"
-                    f"{where}\n"
-                    f"susfs4ksu keeps one branch per GKI version and each holds "
-                    f"only its own 50_add_susfs_in_gki-*.patch, so a commit hash "
-                    f"is valid for exactly one branch. Checking this one out "
-                    f"anyway would produce a tree with the wrong SUSFS patch in "
-                    f"it, so the build stops here instead.\n"
-                    f"Either pass the equivalent commit on '{branch}', or use "
-                    f"the per-branch form to cover several branches in one run:\n"
-                    f"  --susfs-commit '{branch}=<ref>,gki-android13-5.15=<ref>'\n"
-                    f"Browse the branch at: "
-                    f"https://github.com/ShirkNeko/susfs4ksu/commits/{branch}"
-                )
-
-            self._run_cmd(f"git checkout {sha}", check=False)
-            logger.info(f"susfs4ksu pinned to {sha[:12]} on {branch}")
         finally:
             self._chdir(Path(prev_cwd))
 
@@ -2092,6 +2143,26 @@ CONFIG_CIFS_XATTR=y
                 f"so SUSFS silently compiles out entirely despite the main "
                 f"SUSFS patch and PATCH_STATUS.json both reporting success."
             )
+        src_note = ""
+        if self.susfs_ksu_patch_ref:
+            # Split pin: the KernelSU half comes from an older susfs commit
+            # than the kernel half. Extract that version next to the build.
+            ref = self.susfs_ksu_patch_ref
+            extracted = self.work_dir / f"10_enable_susfs_for_ksu.from-{ref[:12]}.patch"
+            res = self._run_cmd(
+                f"git -C {self.susfs_dir} show "
+                f"{ref}:kernel_patches/KernelSU/10_enable_susfs_for_ksu.patch > {extracted}",
+                check=False,
+            )
+            if res.returncode != 0 or not extracted.exists() or extracted.stat().st_size == 0:
+                self._mark("susfs_kernelsu_integration", "failed", f"could not extract patch from {ref[:12]}")
+                raise RuntimeError(
+                    f"Could not extract KernelSU/10_enable_susfs_for_ksu.patch "
+                    f"from susfs4ksu {ref[:12]}."
+                )
+            patch_file = extracted
+            src_note = f"KernelSU patch from susfs {ref[:12]}"
+            logger.info(f"Using the split-pin KernelSU patch: {extracted.name}")
         self._chdir(ksu_dir)
         result = self._run_cmd(f"patch -p1 --fuzz=3 < {patch_file}", check=False)
         self._chdir(self.work_dir)
@@ -2107,9 +2178,10 @@ CONFIG_CIFS_XATTR=y
                     f"Continuing would produce a kernel with CONFIG_KSU_SUSFS "
                     f"silently undefined."
                 )
-            self._mark("susfs_kernelsu_integration", "applied", "manual kernel/core/init.c fixup (see log)")
+            self._mark("susfs_kernelsu_integration", "applied",
+                       "; ".join(x for x in (src_note, "manual kernel/core/init.c fixup (see log)") if x))
             return
-        self._mark("susfs_kernelsu_integration", "applied")
+        self._mark("susfs_kernelsu_integration", "applied", src_note)
 
     def _recover_susfs_init_c(self, ksu_dir) -> bool:
         # Known, narrow drift point: 10_enable_susfs_for_ksu.patch was
