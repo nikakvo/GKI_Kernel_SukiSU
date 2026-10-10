@@ -8,13 +8,20 @@
 #      kernel Kbuild and the manager do,
 #   2. finds the newest susfs commit for the branch,
 #   3. applies 10_enable_susfs_for_ksu.patch FOR REAL in a throwaway worktree
-#      and runs the pipeline's own _recover_susfs_init_c() on it - so the
+#      and runs the pipeline's own recovery (_recover_susfs_init_c(), which
+#      also calls _recover_susfs_selinux_hide_c()) on it - so the
 #      verdict comes from the same code the build will run, not from counting
 #      hunks. If HEAD's KernelSU patch no longer fits SukiSU (upstream synced
 #      it to tiann/KernelSU), it tries the older versions of THAT ONE FILE and
 #      suggests a split pin "<HEAD>+<older>" - kernel-side fixes from HEAD,
 #      KernelSU wiring from the newest version that still fits - but only when
-#      the commits being skipped touched nothing except that patch file,
+#      the commits being skipped touched nothing except that patch file.
+#      It only does this when that patch actually changed since the last
+#      good build - if it didn't, the drift is on the SukiSU side and older
+#      patches can't help,
+#   3b. on STOP, prints a drift report: for every file with a rejected hunk,
+#      which SukiSU commits changed it since the last good build (or that
+#      SukiSU didn't touch it, so the susfs patch is what moved),
 #   4. prints the exact ./build-kernel.sh command to run,
 #   5. remembers that suggestion, and on the NEXT run asks whether you built,
 #      flashed and tested it - answer 1 and it updates the known-good pins
@@ -308,7 +315,7 @@ trap cleanup EXIT
 # patch_test <susfs ref to take the KernelSU patch from>  -> sets VERDICT, DETAIL
 patch_test() {
     local ref="$1" out rc failed_files n_failed rec left rej
-    VERDICT="STOP"; DETAIL=""
+    VERDICT="STOP"; DETAIL=""; LAST_FAILED=""
     drop_worktree
     if ! git -C "$SUSFS" show "$ref:$KSU_PATCH_REL" > "$PATCHFILE" 2>/dev/null; then
         DETAIL="10_enable_susfs_for_ksu.patch not found in susfs ${ref:0:8}"; return
@@ -322,6 +329,7 @@ patch_test() {
         | awk '/^patching file /{f=$3} /FAILED/{if(f!=""){print f; f=""}}' \
         | sort -u | tr '\n' ' ')"
     n_failed="$(printf '%s\n' "$out" | grep -cE '^Hunk.*FAILED' || true)"
+    LAST_FAILED="$failed_files"
     if [ "$rc" -eq 0 ]; then
         VERDICT="CLEAN"; DETAIL="patch applies fully - no recovery needed"; return
     fi
@@ -343,24 +351,77 @@ PY
         rej="$(find "$WORKTREE" -name '*.rej' | wc -l)"
         if [ "$left" = "0" ] && [ "$rej" = "0" ]; then
             VERDICT="RECOVERED"
-            DETAIL="_recover_susfs_init_c fixed it (same code the build runs)"
+            DETAIL="pipeline recovery fixed it (same code the build runs)"
         else
             DETAIL="recovery ran but left $left ksu_late_loaded ref(s) / $rej .rej file(s)"
         fi
     elif [ "$rec" = "False" ]; then
-        DETAIL="_recover_susfs_init_c could not handle this - upstream changed something new"
+        DETAIL="pipeline recovery could not handle this - upstream changed something new"
     else
         DETAIL="could not run kernel_builder.py (python error)"
     fi
 }
+
+# drift_report <files>  - who changed each file with a rejected hunk
+KNOWN_DRIFT_kernel_core_init_c="_recover_susfs_init_c"
+KNOWN_DRIFT_kernel_feature_selinux_hide_c="_recover_susfs_selinux_hide_c"
+drift_report() {
+    local f log key known
+    [ -n "$1" ] || return 0
+    echo
+    echo "  ${B}Drift report${N} (SukiSU ${PIN_SHA:0:8} -> ${CAND_SHA:0:8}):"
+    for f in $1; do
+        key="KNOWN_DRIFT_$(printf '%s' "$f" | tr '/.-' '___')"
+        known="${!key:-}"
+        echo "    ${C}$f${N}${known:+  (known drift point, handled by $known)}"
+        if [ -n "$PIN_SHA" ]; then
+            log="$(git -C "$SUKI" log --oneline --no-decorate "$PIN_SHA..$CAND_SHA" -- "$f" 2>/dev/null)"
+        else
+            log=""
+        fi
+        if [ -n "$log" ]; then
+            echo "      changed in SukiSU since the last good build by:"
+            printf '%s\n' "$log" | head -n 10 | sed 's/^/        /'
+        else
+            if [ "$PATCH_SAME" = 1 ]; then
+                echo "      not changed in SukiSU since the last good build, and the susfs"
+                echo "      patch is the same - old drift, normally handled by recovery."
+            else
+                echo "      not changed in SukiSU since the last good build -"
+                echo "      the susfs KernelSU patch is what moved for this file."
+            fi
+        fi
+    done
+    echo
+    echo "  Send this whole output for a look. Files marked 'known drift point'"
+    echo "  usually need only a small extension of that recovery function."
+}
+
+# Was the susfs KernelSU patch at HEAD the very same one that worked last
+# time? Then any drift is on the SukiSU side, and trying older versions of
+# that patch can only fit worse.
+PATCH_SAME=0
+if [ -n "$SUSFS_PIN_FULL" ]; then
+    PIN_PATCH_REF="$(susfs_p "$SUSFS_PIN_FULL")"; : "${PIN_PATCH_REF:=$SUSFS_PIN_K}"
+    if [ -n "$PIN_PATCH_REF" ] && \
+       git -C "$SUSFS" diff --quiet "$PIN_PATCH_REF" "$SUSFS_HEAD" -- "$KSU_PATCH_REL" 2>/dev/null; then
+        PATCH_SAME=1
+    fi
+fi
 
 hdr "Patch test: ${CAND_LABEL} ${CAND_SHA:0:8} + susfs ${SUSFS_HEAD:0:8}"
 SUSFS_USE="$SUSFS_HEAD"
 patch_test "$SUSFS_HEAD"
 case "$VERDICT" in
     CLEAN|RECOVERED) ok "$DETAIL" ;;
-    *)               bad "$DETAIL" ;;
+    *)               bad "$DETAIL"; drift_report "$LAST_FAILED" ;;
 esac
+TRY_FALLBACK=1
+if [ "$VERDICT" = "STOP" ] && [ "$PATCH_SAME" = 1 ]; then
+    TRY_FALLBACK=0
+    echo "  The susfs KernelSU patch is the same one that worked last time"
+    echo "  (${PIN_PATCH_REF:0:8}), so older versions of it won't help - skipping fallbacks."
+fi
 
 # ---- 3b. fallback: older KernelSU patch + HEAD's kernel side -----------------
 # susfs upstream sometimes rewrites ONLY the KernelSU patch for tiann/KernelSU
@@ -369,7 +430,7 @@ esac
 # through the versions of that one file and take the newest that fits - but
 # stop at any commit that changed the KernelSU patch AND something else: that
 # is a paired API change and must not be split.
-if [ "$VERDICT" = "STOP" ]; then
+if [ "$VERDICT" = "STOP" ] && [ "$TRY_FALLBACK" = 1 ]; then
     mapfile -t KSU_CHANGES < <(git -C "$SUSFS" log --format=%H "$SUSFS_HEAD" -- "$KSU_PATCH_REL" 2>/dev/null | head -n 6)
     skipped=()
     for ((i = 0; i + 1 < ${#KSU_CHANGES[@]}; i++)); do
@@ -465,5 +526,5 @@ if [ "$KSU_NEW" = 1 ] || [ "$SUSFS_NEW" = 1 ]; then
     echo "   3. After it boots: manager shows ${CAND_CODE}-${MAIN_UAPI} for both, check-features.sh is clean."
     echo "   4. Run ${B}./check-release.sh${N} again - it will ask if this build works."
     echo "      Answer 1 and it saves these values into config.py by itself."
-    echo "      Then upload config.py and release as v$CAND_CODE."
+    echo "      Then push config.py (gitsync push) and release as v${CAND_CODE}-r01."
 fi

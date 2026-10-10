@@ -2225,11 +2225,22 @@ CONFIG_CIFS_XATTR=y
         # found or isn't unique, we bail out and let the caller
         # hard-fail rather than guess at a file that's drifted further
         # than this.
+        # kernel/feature/selinux_hide.c has its own, separate recovery
+        # (see _recover_susfs_selinux_hide_c). Run it first; if it
+        # can't handle that file, the whole recovery fails.
+        sel_rej = ksu_dir / "kernel/feature/selinux_hide.c.rej"
+        if sel_rej.exists():
+            if not self._recover_susfs_selinux_hide_c(ksu_dir):
+                return False
+
         init_c = ksu_dir / "kernel/core/init.c"
         reject_files = list(ksu_dir.glob("**/*.rej"))
         other_rejects = [r for r in reject_files if r.name != "init.c.rej"]
         if other_rejects or not init_c.exists():
             return False
+        if not reject_files:
+            # init.c applied cleanly - only selinux_hide.c needed help.
+            return True
 
         content = init_c.read_text()
         original = content
@@ -2419,6 +2430,98 @@ CONFIG_CIFS_XATTR=y
             "infra/symbol_resolver.o to kernel/Kbuild - it's still "
             "needed by feature/cpu_spoof.c and feature/uts_spoof.c, "
             "which Kbuild's own hunk didn't account for."
+        )
+        return True
+
+    # Functions that 10_enable_susfs_for_ksu.patch deletes outright from
+    # kernel/feature/selinux_hide.c. susfs re-implements them on the
+    # kernel side (security/selinux/hooks.c + selinuxfs.c, from
+    # 50_add_susfs_in_gki-*.patch), so whatever SukiSU changes INSIDE
+    # their bodies never reaches a SUSFS build anyway.
+    _SELINUX_HIDE_DELETED_FUNCS = re.compile(
+        r'^(static [^\n;]*\b(?:my_write_context|my_write_access|my_setprocattr)\([^\n;]*\)\n\{\n)'
+        r'.*?^\}\n',
+        re.MULTILINE | re.DOTALL,
+    )
+
+    @classmethod
+    def _strip_selinux_hide_bodies(cls, text: str) -> str:
+        return cls._SELINUX_HIDE_DELETED_FUNCS.sub(lambda m: m.group(1) + '}\n', text)
+
+    def _recover_susfs_selinux_hide_c(self, ksu_dir) -> bool:
+        # Known, narrow drift point #2: hunk #3 of the selinux_hide.c
+        # part of 10_enable_susfs_for_ksu.patch is one big DELETION
+        # (~200 lines: the sel_inos enum, my_write_context(),
+        # my_write_access(), my_setprocattr() and friends) because
+        # susfs moves that logic into the kernel itself. When
+        # SukiSU-Ultra edits the body of one of those functions
+        # (e.g. 2026-10: b861ffa4 "fix sidtab detection", 49249b6a
+        # "Keep original permission check sequence"), the text the
+        # hunk wants to delete no longer matches and `patch` rejects
+        # it - even though the result would be identical, since those
+        # bodies get deleted either way.
+        #
+        # Safe recovery: for each rejected hunk, find the region it
+        # covers in the current file (unique start/end anchors taken
+        # from the hunk itself) and compare it with the hunk's "old"
+        # side AFTER blanking out the bodies of the deleted functions.
+        # Only if everything else matches byte-for-byte do we swap in
+        # the hunk's "new" side. Any other drift (new code outside
+        # those bodies, renamed functions, a changed include list ...)
+        # -> return False and let the build hard-fail.
+        target = ksu_dir / "kernel/feature/selinux_hide.c"
+        rej = ksu_dir / "kernel/feature/selinux_hide.c.rej"
+        if not target.exists() or not rej.exists():
+            return False
+
+        hunks = []
+        cur = None
+        for line in rej.read_text().splitlines(keepends=True):
+            if line.startswith('@@'):
+                cur = {'old': [], 'new': []}
+                hunks.append(cur)
+                continue
+            if cur is None or line.startswith('\\'):
+                continue  # file headers / "\ No newline at end of file"
+            tag, body = line[:1], line[1:]
+            if tag in (' ', '-'):
+                cur['old'].append(body)
+            if tag in (' ', '+'):
+                cur['new'].append(body)
+        if not hunks:
+            return False
+
+        content = target.read_text()
+        for h in hunks:
+            old, new = h['old'], h['new']
+            if len(old) < 8:
+                return False
+            start_anchor = ''.join(old[:3])
+            end_anchor = ''.join(old[-3:])
+            if content.count(start_anchor) != 1 or content.count(end_anchor) != 1:
+                return False
+            start = content.index(start_anchor)
+            end = content.index(end_anchor) + len(end_anchor)
+            if end <= start:
+                return False
+            region = content[start:end]
+            if self._strip_selinux_hide_bodies(region) != self._strip_selinux_hide_bodies(''.join(old)):
+                return False
+            content = content[:start] + ''.join(new) + content[end:]
+
+        target.write_text(content)
+        rej.unlink()
+        orig = ksu_dir / "kernel/feature/selinux_hide.c.orig"
+        if orig.exists():
+            orig.unlink()
+        logger.info(
+            "kernel/feature/selinux_hide.c: SUSFS<->KernelSU patch hunk(s) "
+            "didn't match because SukiSU-Ultra changed the bodies of "
+            "my_write_context/my_write_access/my_setprocattr - functions "
+            "this patch deletes anyway (susfs re-implements them in the "
+            "kernel). Everything outside those bodies matched exactly, so "
+            "the hunk's result was applied directly "
+            "(see _recover_susfs_selinux_hide_c)."
         )
         return True
 
