@@ -2410,9 +2410,22 @@ CONFIG_CIFS_XATTR=y
                     f"Continuing would produce a kernel with CONFIG_KSU_SUSFS "
                     f"silently undefined."
                 )
-            self._mark("susfs_kernelsu_integration", "applied",
-                       "; ".join(x for x in (src_note, "manual kernel/core/init.c fixup (see log)") if x))
-            return
+            src_note = "; ".join(x for x in (src_note, "manual SukiSU drift fixup (see log)") if x)
+        if not self._disable_susfs_preinit(ksu_dir):
+            self._mark("susfs_kernelsu_integration", "failed", "unknown preinit block in kernel/Kbuild")
+            raise RuntimeError(
+                "SukiSU-Ultra's kernel/Kbuild has a preinit block in a shape "
+                "_disable_susfs_preinit() doesn't know. Preinit needs syscall "
+                "hooks the SUSFS patch removes, so building it would fail to "
+                "link (or silently never run). Stopping."
+            )
+        if not self._fixup_susfs_sucompat_util_h(ksu_dir):
+            self._mark("susfs_kernelsu_integration", "failed", "sucompat.c util.h fixup")
+            raise RuntimeError(
+                "kernel/feature/sucompat.c uses userspace_stack_buffer() but neither "
+                "defines it nor can get it from include/util.h in a known way "
+                "(_fixup_susfs_sucompat_util_h). Stopping."
+            )
         self._mark("susfs_kernelsu_integration", "applied", src_note)
 
     def _recover_susfs_init_c(self, ksu_dir) -> bool:
@@ -2472,6 +2485,12 @@ CONFIG_CIFS_XATTR=y
         ksud_rej = ksu_dir / "kernel/runtime/ksud_integration.c.rej"
         if ksud_rej.exists():
             if not self._recover_susfs_ksud_integration_c(ksu_dir):
+                return False
+        # kernel/supercall/dispatch.c (SukiSU's preinit flag in
+        # do_get_info()) - see _recover_susfs_dispatch_c.
+        dispatch_rej = ksu_dir / "kernel/supercall/dispatch.c.rej"
+        if dispatch_rej.exists():
+            if not self._recover_susfs_dispatch_c(ksu_dir):
                 return False
 
         init_c = ksu_dir / "kernel/core/init.c"
@@ -2589,17 +2608,52 @@ CONFIG_CIFS_XATTR=y
             )
             if len(late_loaded_re.findall(content)) != 1:
                 return False
-            content = late_loaded_re.sub(
+            # SukiSU-Ultra's own module preinit (3b607917, 2026-10)
+            # adds ksu_preinit_init() to the normal-boot arm, right
+            # after ksu_ksud_init(). It isn't in the upstream hunk, so
+            # carry it over. In a SUSFS build preinit is compiled out
+            # (see _disable_susfs_preinit), so this is the header's
+            # empty stub - kept so the file stays as close to SukiSU's
+            # as possible.
+            late_block = late_loaded_re.search(content).group(0)
+            preinit_init = (
+                '    ksu_preinit_init();\n\n'
+                if '        ksu_preinit_init();\n' in late_block else ''
+            )
+            replacement = (
                 '    ksu_allowlist_init();\n\n'
                 '    ksu_throne_tracker_init();\n\n'
                 '    ksu_ksud_init();\n\n'
+                + preinit_init +
                 '    ksu_file_wrapper_init();\n\n'
                 '    return 0;\n'
                 '}\n\n'
-                'void __exit kernelsu_exit(void)\n{\n',
-                content,
-                count=1,
+                'void __exit kernelsu_exit(void)\n{\n'
             )
+            # The normal-boot ("else") arm is what a Built-in kernel
+            # actually runs. Every call SukiSU puts there must survive,
+            # except the hook manager the SUSFS patch replaces. A call we
+            # don't know (like ksu_preinit_init() was) would otherwise be
+            # dropped silently - the build passes, the feature is gone.
+            else_arm = late_block.split('    } else {\n', 1)
+            if len(else_arm) != 2 or '\n    }\n' not in else_arm[1]:
+                return False
+            else_arm = else_arm[1].split('\n    }\n', 1)[0]
+            kept = {l.strip() for l in replacement.splitlines()}
+            lost = [
+                l.strip() for l in else_arm.splitlines()
+                if self._INIT_C_CALL.match(l.strip())
+                and l.strip() not in kept
+                and l.strip() != 'ksu_syscall_hook_manager_init();'
+            ]
+            if lost:
+                for l in lost:
+                    logger.error(
+                        f"kernel/core/init.c recovery: {l!r} in the normal-boot arm of "
+                        "kernelsu_init() is new - not carried over"
+                    )
+                return False
+            content = late_loaded_re.sub(lambda _m: replacement, content, count=1)
 
             # kernelsu_exit(): its own hook-manager teardown call, and
             # the ksu_late_loaded guard around ksu_ksud_exit() (always
@@ -2610,11 +2664,24 @@ CONFIG_CIFS_XATTR=y
                 '    ksu_syscall_hook_manager_exit();\n\n',
                 '',
             )
-            content = self._replace_once(
-                content,
-                '    if (!ksu_late_loaded)\n        ksu_ksud_exit();\n',
-                '    ksu_ksud_exit();\n',
+            # Since 3b607917 SukiSU-Ultra also tears down preinit under
+            # the same guard (braced block). Accept either form.
+            exit_guard_preinit = (
+                '    if (!ksu_late_loaded) {\n'
+                '        ksu_ksud_exit();\n'
+                '        ksu_preinit_exit();\n'
+                '    }\n'
             )
+            if content.count(exit_guard_preinit) == 1:
+                content = content.replace(
+                    exit_guard_preinit, '    ksu_ksud_exit();\n    ksu_preinit_exit();\n', 1
+                )
+            else:
+                content = self._replace_once(
+                    content,
+                    '    if (!ksu_late_loaded)\n        ksu_ksud_exit();\n',
+                    '    ksu_ksud_exit();\n',
+                )
         except ValueError:
             # One of the anchors above wasn't found, or wasn't unique -
             # this file has drifted further than we know how to handle.
@@ -2841,6 +2908,27 @@ CONFIG_CIFS_XATTR=y
         if content.count(self._KSUD_BLACKLIST_BLOCK) != 1:
             return False
         content = content.replace(self._KSUD_BLACKLIST_BLOCK, '', 1)
+
+        # SukiSU-Ultra's module preinit (3b607917, 2026-10) adds
+        # ksu_preinit_release() in front of the first statement of both
+        # blocks (second_stage and first zygote). Optional: older SukiSU
+        # has neither. Taken out here, put back in the same spots after
+        # the hunk is applied. In a SUSFS build it is the header's empty
+        # stub (see _disable_susfs_preinit).
+        release = 'ksu_preinit_release();\n'
+        preinit_spots = []
+        for nxt in ('ksu_selinux_hide_handle_second_stage();\n', 'on_post_fs_data();\n'):
+            pair = ' ' * 12 + release + ' ' * 12 + nxt
+            n = content.count(pair)
+            if n > 1:
+                return False
+            if n == 1:
+                content = content.replace(pair, ' ' * 12 + nxt, 1)
+                preinit_spots.append(nxt)
+        if release in content:
+            # a ksu_preinit_release() somewhere we don't know about
+            return False
+
         if content.count(old) != 1:
             return False
         content = content.replace(old, new, 1)
@@ -2857,6 +2945,13 @@ CONFIG_CIFS_XATTR=y
         )
         if '#include "feature/module_blacklist.h"' not in content:
             return False
+        for nxt in preinit_spots:
+            anchor = ' ' * 16 + nxt
+            if content.count(anchor) != 1:
+                return False
+            content = content.replace(anchor, ' ' * 16 + release + anchor, 1)
+        if preinit_spots and '#include "preinit/preinit.h"' not in content:
+            return False
 
         target.write_text(content)
         rej.unlink()
@@ -2867,8 +2962,186 @@ CONFIG_CIFS_XATTR=y
             "kernel/runtime/ksud_integration.c: SUSFS<->KernelSU patch hunk "
             "didn't match because SukiSU-Ultra calls ksu_module_blacklist_apply() "
             "at second stage init (upstream KernelSU doesn't). Applied the hunk "
-            "and put the call back after ksu_feature_apply_forced() "
-            "(see _recover_susfs_ksud_integration_c)."
+            "and put the call back after ksu_feature_apply_forced()"
+            + (", plus SukiSU's ksu_preinit_release() calls" if preinit_spots else "")
+            + " (see _recover_susfs_ksud_integration_c)."
+        )
+        return True
+
+    # SukiSU-Ultra's preinit flag in do_get_info() (3b607917, 2026-10).
+    _DISPATCH_PREINIT_BLOCK = (
+        "    // A late load never sees PID 1's selinux_setup, so preinit cannot run.\n"
+        "    if (ksu_preinit_enabled_param() && !ksu_late_loaded) {\n"
+        "        cmd.flags |= KSU_GET_INFO_FLAG_PREINIT;\n"
+        "    }\n"
+    )
+    # Same block for a SUSFS build: the patch removes ksu_late_loaded
+    # (Built-in only, it was always false there).
+    _DISPATCH_PREINIT_BLOCK_SUSFS = (
+        "    if (ksu_preinit_enabled_param()) {\n"
+        "        cmd.flags |= KSU_GET_INFO_FLAG_PREINIT;\n"
+        "    }\n"
+    )
+
+    def _recover_susfs_dispatch_c(self, ksu_dir) -> bool:
+        # Known, narrow drift point #4: 10_enable_susfs_for_ksu.patch
+        # removes the ksu_bundled and ksu_late_loaded flag blocks from
+        # both do_get_info() and do_get_info_legacy() (it deletes both
+        # variables). SukiSU-Ultra 3b607917 ("module preinit") put a
+        # KSU_GET_INFO_FLAG_PREINIT block, which also reads
+        # ksu_late_loaded, at the end of that region in do_get_info().
+        # The do_get_info() hunk then no longer matches; `patch` applies
+        # it with fuzz to do_get_info_legacy() instead (same text there),
+        # and the legacy hunk, whose text is now gone, is rejected. Net
+        # result: legacy is done, do_get_info() still has the old blocks.
+        #
+        # Recovery: the rejected hunk's "old" side plus SukiSU's preinit
+        # block in front of "#if KSU_IS_PR_BUILD" must match exactly once
+        # (that is do_get_info()); swap in the hunk's "new" side with the
+        # preinit block, minus "&& !ksu_late_loaded" (always true on a
+        # Built-in kernel, and the variable no longer exists). In a SUSFS
+        # build ksu_preinit_enabled_param() is the header stub returning
+        # false (see _disable_susfs_preinit), so the manager is told
+        # preinit is unavailable - which is the truth. Any other drift ->
+        # False, build hard-fails.
+        target = ksu_dir / "kernel/supercall/dispatch.c"
+        rej = ksu_dir / "kernel/supercall/dispatch.c.rej"
+        if not target.exists() or not rej.exists():
+            return False
+
+        hunks = []
+        cur = None
+        for line in rej.read_text().splitlines(keepends=True):
+            if line.startswith('@@'):
+                cur = {'old': [], 'new': []}
+                hunks.append(cur)
+                continue
+            if cur is None or line.startswith('\\'):
+                continue
+            tag, body = line[:1], line[1:]
+            if tag in (' ', '-'):
+                cur['old'].append(body)
+            if tag in (' ', '+'):
+                cur['new'].append(body)
+        if len(hunks) != 1:
+            return False
+        old, new = ''.join(hunks[0]['old']), ''.join(hunks[0]['new'])
+
+        pr_build = '#if KSU_IS_PR_BUILD\n'
+        if old.count(pr_build) != 1 or new.count(pr_build) != 1:
+            return False
+        old_suki = old.replace(pr_build, self._DISPATCH_PREINIT_BLOCK + pr_build, 1)
+        new_suki = new.replace(pr_build, self._DISPATCH_PREINIT_BLOCK_SUSFS + pr_build, 1)
+
+        content = target.read_text()
+        if content.count(old_suki) != 1:
+            return False
+        content = content.replace(old_suki, new_suki, 1)
+        # Both functions must now be free of the two removed variables,
+        # and the legacy function must already look like the hunk wanted.
+        if 'ksu_late_loaded' in content or 'ksu_bundled' in content:
+            return False
+        if content.count(new) != 1 or content.count(new_suki) != 1:
+            return False
+        if '#include "preinit/preinit.h"' not in content:
+            return False
+
+        target.write_text(content)
+        rej.unlink()
+        orig = ksu_dir / "kernel/supercall/dispatch.c.orig"
+        if orig.exists():
+            orig.unlink()
+        logger.info(
+            "kernel/supercall/dispatch.c: SUSFS<->KernelSU patch hunk didn't match "
+            "because SukiSU-Ultra added a preinit flag to do_get_info(). Removed the "
+            "ksu_bundled/ksu_late_loaded blocks as the hunk wanted and kept the preinit "
+            "flag without the ksu_late_loaded test (see _recover_susfs_dispatch_c)."
+        )
+        return True
+
+    def _fixup_susfs_sucompat_util_h(self, ksu_dir) -> bool:
+        # SukiSU-Ultra 3b607917 (2026-10) moved userspace_stack_buffer()
+        # out of feature/sucompat.c into include/util.h (static inline,
+        # preinit.c needs it too). 10_enable_susfs_for_ksu.patch, written
+        # against upstream KernelSU, removes `#include "util.h"` from
+        # sucompat.c, and its own new code (sh_user_path()) calls that
+        # helper - so the hunks apply cleanly but sucompat.c fails with
+        # "implicit declaration of function 'userspace_stack_buffer'".
+        # Fix: put the include back, right after "arch.h" (util.h needs
+        # nothing else; checked that none of util.h's names clash with
+        # sucompat.c). Runs on every SUSFS build, clean patch or not.
+        # Helper still in sucompat.c (older SukiSU) or include already
+        # there -> nothing to do. Unknown shape -> False, build stops.
+        sucompat = ksu_dir / "kernel/feature/sucompat.c"
+        util_h = ksu_dir / "kernel/include/util.h"
+        if not sucompat.exists():
+            return False
+        text = sucompat.read_text()
+        if 'userspace_stack_buffer(' not in text:
+            return True
+        if re.search(r'^static [^\n;]*\buserspace_stack_buffer\(', text, re.M):
+            return True  # still defined locally
+        if '#include "util.h"' in text:
+            return True
+        if not util_h.exists() or 'userspace_stack_buffer(' not in util_h.read_text():
+            return False
+        anchor = '#include "arch.h"\n'
+        if text.count(anchor) != 1:
+            return False
+        sucompat.write_text(text.replace(anchor, anchor + '#include "util.h"\n', 1))
+        logger.info(
+            'kernel/feature/sucompat.c: re-added #include "util.h" - SukiSU-Ultra moved '
+            "userspace_stack_buffer() there and the SUSFS patch drops that include "
+            "(see _fixup_susfs_sucompat_util_h)."
+        )
+        return True
+
+    # SukiSU-Ultra 3b607917 (2026-10) builds a static "preinit runner"
+    # into kernelsu and swaps it in for PID 1's selinux_setup execve.
+    _KBUILD_PREINIT_IF = 'ifneq ($(wildcard $(KSU_UAPI_INC)/linux/unistd.h),)\n'
+
+    def _disable_susfs_preinit(self, ksu_dir) -> bool:
+        # SukiSU-Ultra's module preinit cannot work in a SUSFS build:
+        # its only entry point, ksu_preinit_handle_execve(), is called
+        # from hook/syscall_event_bridge.c, and preinit.c itself uses
+        # ksu_syscall_table from hook/<arch>/syscall_hook.c - both
+        # objects are dropped from kernel/Kbuild by
+        # 10_enable_susfs_for_ksu.patch (susfs hooks execve its own
+        # way). Compiling preinit.o anyway would fail to link (undefined
+        # ksu_syscall_table), and the runner would never run.
+        #
+        # So build it the way SukiSU itself does when the runner can't be
+        # built: -DKSU_NO_PREINIT, which turns preinit.h into empty
+        # stubs (ksu_preinit_enabled_param() returns false, so the
+        # manager/ksud see preinit as unavailable). This also skips
+        # compiling the static runner with $(LD). Runs on every SUSFS
+        # build, clean patch or recovered. No preinit block in Kbuild
+        # (older SukiSU) -> nothing to do. Block present but in an
+        # unknown shape -> False, build hard-fails.
+        kbuild = ksu_dir / "kernel/Kbuild"
+        if not kbuild.exists():
+            return False
+        text = kbuild.read_text()
+        if 'preinit/preinit.o' not in text:
+            return True
+        if 'KSU_SUSFS_NO_PREINIT' in text:
+            return True  # already done
+        if text.count(self._KBUILD_PREINIT_IF) != 1:
+            return False
+        text = text.replace(
+            self._KBUILD_PREINIT_IF,
+            '# KSU_SUSFS_NO_PREINIT: the SUSFS patch drops the syscall hooks preinit\n'
+            '# needs (hook/syscall_event_bridge.o, hook/*/syscall_hook.o), see\n'
+            '# _disable_susfs_preinit in the GKI pipeline\'s kernel_builder.py.\n'
+            'ifeq (1,1)\n'
+            'ccflags-y += -DKSU_NO_PREINIT\n'
+            'else ' + self._KBUILD_PREINIT_IF,
+            1,
+        )
+        kbuild.write_text(text)
+        logger.info(
+            "kernel/Kbuild: SukiSU-Ultra module preinit compiled out (-DKSU_NO_PREINIT) - "
+            "it needs the syscall hooks the SUSFS patch removes (see _disable_susfs_preinit)."
         )
         return True
 

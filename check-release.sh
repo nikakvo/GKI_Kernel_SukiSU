@@ -11,7 +11,8 @@
 #   2. finds the newest susfs commit for the branch,
 #   3. applies 10_enable_susfs_for_ksu.patch FOR REAL in a throwaway worktree
 #      and runs the pipeline's own recovery (_recover_susfs_init_c(), which
-#      also calls _recover_susfs_selinux_hide_c()) on it - so the
+#      also calls the selinux_hide.c / ksud_integration.c / dispatch.c
+#      recoveries) plus the post-patch fixups on it - so the
 #      verdict comes from the same code the build will run, not from counting
 #      hunks. If HEAD's KernelSU patch no longer fits SukiSU (upstream synced
 #      it to tiann/KernelSU), it tries the older versions of THAT ONE FILE and
@@ -337,11 +338,13 @@ patch_test() {
         | sort -u | tr '\n' ' ')"
     n_failed="$(printf '%s\n' "$out" | grep -cE '^Hunk.*FAILED' || true)"
     LAST_FAILED="$failed_files"
-    if [ "$rc" -eq 0 ]; then
-        VERDICT="CLEAN"; DETAIL="patch applies fully - no recovery needed"; return
+    if [ "$rc" -ne 0 ]; then
+        echo "  $n_failed hunk(s) failed in: ${failed_files:-?}"
     fi
-    echo "  $n_failed hunk(s) failed in: ${failed_files:-?}"
-    rec="$(cd "$BUILDER_DIR" && python3 - "$WORKTREE" 2>/dev/null <<'PY'
+    # Same code the build runs: the drift recovery (only when hunks failed),
+    # then _disable_susfs_preinit() + _fixup_susfs_sucompat_util_h() on every
+    # SUSFS build.
+    rec="$(cd "$BUILDER_DIR" && python3 - "$WORKTREE" "$rc" 2>/dev/null <<'PY'
 import sys, logging
 # Only the recovery's own ERROR lines (why it refused) are passed through,
 # as REASON= markers; everything else kernel_builder logs stays quiet.
@@ -353,13 +356,23 @@ sys.path.insert(0, '.')
 from pathlib import Path
 import kernel_builder as kb
 b = object.__new__(kb.KernelBuilder)
-print("RECOVERY=" + ("True" if kb.KernelBuilder._recover_susfs_init_c(b, Path(sys.argv[1])) else "False"))
+tree = Path(sys.argv[1])
+ok = True if sys.argv[2] == "0" else kb.KernelBuilder._recover_susfs_init_c(b, tree)
+if ok and not kb.KernelBuilder._disable_susfs_preinit(b, tree):
+    print("REASON=kernel/Kbuild: preinit block in an unknown shape (_disable_susfs_preinit)")
+    ok = False
+if ok and not kb.KernelBuilder._fixup_susfs_sucompat_util_h(b, tree):
+    print("REASON=feature/sucompat.c: userspace_stack_buffer() not reachable (_fixup_susfs_sucompat_util_h)")
+    ok = False
+print("RECOVERY=" + ("True" if ok else "False"))
 PY
 )"
     # kernel_builder prints things on import - keep only our marker lines
     reasons="$(printf '%s\n' "$rec" | grep '^REASON=' | cut -d= -f2-)"
     rec="$(printf '%s\n' "$rec" | grep -m1 '^RECOVERY=' | cut -d= -f2)"
-    if [ "$rec" = "True" ]; then
+    if [ "$rec" = "True" ] && [ "$rc" -eq 0 ]; then
+        VERDICT="CLEAN"; DETAIL="patch applies fully - no recovery needed"
+    elif [ "$rec" = "True" ]; then
         left="$(grep -rn --include='*.c' --include='*.h' ksu_late_loaded "$WORKTREE/kernel" 2>/dev/null | grep -vc '\.orig' || true)"
         rej="$(find "$WORKTREE" -name '*.rej' | wc -l)"
         if [ "$left" = "0" ] && [ "$rej" = "0" ]; then
@@ -382,6 +395,7 @@ PY
 KNOWN_DRIFT_kernel_core_init_c="_recover_susfs_init_c"
 KNOWN_DRIFT_kernel_feature_selinux_hide_c="_recover_susfs_selinux_hide_c"
 KNOWN_DRIFT_kernel_runtime_ksud_integration_c="_recover_susfs_ksud_integration_c"
+KNOWN_DRIFT_kernel_supercall_dispatch_c="_recover_susfs_dispatch_c"
 drift_report() {
     local f log key known
     [ -n "$1" ] || return 0
