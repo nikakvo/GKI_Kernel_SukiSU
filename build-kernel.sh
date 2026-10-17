@@ -155,15 +155,15 @@ done
 # ---- Default values ----
 ANDROID_VERSION="android13"
 KERNEL_VERSION="5.15"
-SUB_LEVEL="216"
+SUB_LEVEL="220"
 OS_PATCH="2026-09"
-# Either a respin tag (android13-5.15.216_r00) or a raw commit SHA from
-# android.googlesource.com/kernel/common. This is the SHA of the 216 tree
+# Either a respin tag (android13-5.15.220_r00) or a raw commit SHA from
+# android.googlesource.com/kernel/common. This is the SHA of the 220 tree
 # that has been built and confirmed booting on device.
 # NOTE: this is the KERNEL source ref - do NOT paste a susfs4ksu commit
 # here. They are different repositories; the build will fail with an
 # HTTP 500 from googlesource if they get swapped.
-KERNEL_TAG="android13-5.15.216_r00"
+KERNEL_TAG="android13-5.15.220_r00"
 # Set to "1" if KERNEL_TAG above is an LTS-merge respin (e.g.
 # android13-5.15.209_r00, dotted sub_level style) rather than a regular
 # date-based one (e.g. android13-5.15-2026-06_r4) - adds a "-lts" marker
@@ -314,7 +314,7 @@ check_dependencies
 echo "========================================"
 echo "  GKI KernelSU SUSFS - Build Menu"
 echo "========================================"
-echo "1) Default (android13 / 5.15 / 216 / 2026-09)"
+echo "1) Default (android13 / 5.15 / 220 / 2026-09)"
 echo "2) Custom (choose your own versions)"
 echo "3) All versions from matrix.json"
 echo "========================================"
@@ -442,10 +442,10 @@ if [ "$BUILD_OPTION" == "2" ]; then
 
     read -rp "Android Version (e.g. android13): " ANDROID_VERSION
     read -rp "Kernel Version (e.g. 5.15): " KERNEL_VERSION
-    read -rp "Sublevel (e.g. 211): " SUB_LEVEL
-    read -rp "Security Patch Level (e.g. 2026-06): " OS_PATCH
+    read -rp "Sublevel (e.g. 220): " SUB_LEVEL
+    read -rp "Security Patch Level (e.g. 2026-09): " OS_PATCH
     echo ""
-    echo "Check the exact respin tag here (optional, e.g. android13-5.15.211_r00):"
+    echo "Check the exact respin tag here (optional, e.g. android13-5.15.220_r00):"
     echo "https://android.googlesource.com/kernel/common/+refs"
     read -rp "Kernel Tag (Enter to skip - uses the branch's latest HEAD): " KERNEL_TAG
 
