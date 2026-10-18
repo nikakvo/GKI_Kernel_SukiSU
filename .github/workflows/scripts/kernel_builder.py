@@ -11,7 +11,17 @@ from dataclasses import dataclass, field
 from config import (BuildConfig, KSU_REPO_CONFIG, SUSFS_REPO_CONFIG, SUKISU_PATCH_REPO_CONFIG,
                    DEFAULT_KSU_REF, SUSFS_UPSTREAM_URL, SUSFS_BRANCH_REPOS,
                    ANYKERNEL_CONFIG, KERNEL_PATCHES_CONFIG, BBG_CONFIG, TOOLCHAIN_CONFIG,
-                   LEGACY_FIXES, OP8E_PATCH_URL, KPM_PATCH_URL)
+                   LEGACY_FIXES, OP8E_PATCH_URL)
+
+# KPM image patcher (SukiSU_patch kpm/patch_linux). Pinned to one commit and
+# checked by sha256: it used to be fetched from `main` on every build, and the
+# 2026-10-18 update (7c6289c, new kpimg + patch_linux) produced a kernel that
+# bootloops at the vendor logo. 547ae94 (2026-03-15) is the patcher every
+# release up to v41012 was built with. To move it: change both values together,
+# then build and boot-test before releasing.
+KPM_PATCH_REF = "547ae94bcaec53d030398f857950c64662043a5d"
+KPM_PATCH_SHA256 = "1bd00563e9d8fbbd11a16c0c1c59c5add406e6c5c92557def50f93d6f0aebe2d"
+KPM_PATCH_URL = f"https://raw.githubusercontent.com/ShirkNeko/SukiSU_patch/{KPM_PATCH_REF}/kpm/patch_linux"
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
@@ -1118,6 +1128,66 @@ CONFIG_CIFS_XATTR=y
         )
         self._mark("sukisu_ref", "applied",
                    f"{ksu_ref} -> {(described.stdout or '').strip()}")
+        if not self._fixup_sukisu_kpm_uapi_include(ksu_dir):
+            raise RuntimeError(
+                "SukiSU-Ultra's kernel/extension/kpm/kpm.c uses the KPM uapi "
+                "constants but no header gives them, and extension/kpm/kpm.h is "
+                "in a shape _fixup_sukisu_kpm_uapi_include() doesn't know. "
+                "A KPM build would not compile. Stopping."
+            )
+
+    def _fixup_sukisu_kpm_uapi_include(self, ksu_dir) -> bool:
+        # Upstream SukiSU-Ultra bug, not SUSFS related. edf86467 ("unify
+        # kernel extensions under a single hub", 2026-10) moved kernel/kpm/
+        # to kernel/extension/kpm/ and rewrote kpm.h without the
+        # `#include "uapi/supercall.h"` the old kpm/kpm.h had. kpm.c uses
+        # SUKISU_KPM_*, CMD_KPM_CONTROL* and struct ksu_kpm_cmd from that
+        # header and includes nothing else that pulls it in, so every
+        # CONFIG_KPM=y build fails with "use of undeclared identifier
+        # 'SUKISU_KPM_LOAD'" (verified on pristine SukiSU decfaa5b, no SUSFS).
+        # The rewrite also dropped the CMD_KPM_CONTROL / CMD_KPM_CONTROL_MAX
+        # defines (1 / 10) that kpm.c still uses. Put back exactly what the
+        # old header gave kpm.c; the defines are #ifndef-guarded so they can
+        # never clash if upstream re-adds them somewhere else.
+        # No-op on older SukiSU (no extension/kpm/) and once upstream fixes it.
+        kpm_c = ksu_dir / "kernel/extension/kpm/kpm.c"
+        kpm_h = ksu_dir / "kernel/extension/kpm/kpm.h"
+        if not kpm_c.exists() or not kpm_h.exists():
+            return True
+        marker = '/* KSU_KPM_UAPI_FIXUP: '
+        inc = '#include "uapi/supercall.h"\n'
+        c_text, h_text = kpm_c.read_text(), kpm_h.read_text()
+        need_inc = 'SUKISU_KPM_' in c_text and inc not in c_text and inc not in h_text
+        need_def = (
+            'CMD_KPM_CONTROL' in c_text
+            and '#define CMD_KPM_CONTROL ' not in c_text
+            and '#define CMD_KPM_CONTROL ' not in h_text
+        )
+        if marker in h_text or not (need_inc or need_def):
+            return True
+        anchor = '#include <linux/types.h>\n'
+        if h_text.count(anchor) != 1:
+            return False
+        add = (
+            marker + 'restored from the pre-edf86467 kernel/kpm/kpm.h, '
+            'see the build pipeline */\n'
+        )
+        if need_inc:
+            add += inc
+        if need_def:
+            add += (
+                '#ifndef CMD_KPM_CONTROL\n#define CMD_KPM_CONTROL 1\n#endif\n'
+                '#ifndef CMD_KPM_CONTROL_MAX\n#define CMD_KPM_CONTROL_MAX 10\n#endif\n'
+            )
+        kpm_h.write_text(h_text.replace(anchor, anchor + add, 1))
+        logger.info(
+            "kernel/extension/kpm/kpm.h: restored #include \"uapi/supercall.h\" and "
+            "the CMD_KPM_CONTROL defines - SukiSU-Ultra's extension hub (edf86467) "
+            "dropped them and kpm.c no longer compiles with CONFIG_KPM=y "
+            "(see _fixup_sukisu_kpm_uapi_include)."
+        )
+        self._mark("sukisu_kpm_uapi_include", "applied", "upstream SukiSU KPM header fix")
+        return True
 
     # SukiSU's Kbuild derives the number it reports like this:
     #
@@ -2591,9 +2661,23 @@ CONFIG_CIFS_XATTR=y
                 '    ksu_init_symbol_resolver();\n\n',
                 '    ksu_syscall_hook_init();\n\n',
                 '    ksu_lsm_hook_init();\n',
-                '    ksu_app_profile_init();\n\n',
             ]:
                 content = self._replace_once(content, dead, '')
+            # SukiSU-Ultra's extension hub (edf86467, 2026-10) calls
+            # ksu_extension_init() + ksu_extension_register_all() right
+            # after ksu_app_profile_init(), so that line is no longer
+            # followed by a blank line. Drop only ksu_app_profile_init()
+            # (as hunk #7 does) and keep SukiSU's two extension calls.
+            ext_calls = (
+                '    ksu_extension_init();\n'
+                '    ksu_extension_register_all();\n'
+            )
+            if content.count('    ksu_app_profile_init();\n' + ext_calls) == 1:
+                content = content.replace(
+                    '    ksu_app_profile_init();\n' + ext_calls, ext_calls, 1
+                )
+            else:
+                content = self._replace_once(content, '    ksu_app_profile_init();\n\n', '')
 
             call_anchor = '    ksu_feature_init();\n'
             content = self._replace_once(
@@ -2715,6 +2799,11 @@ CONFIG_CIFS_XATTR=y
         # So check the result against what the rejected hunks actually
         # asked for, the same way the other two recoveries do.
         problems = self._check_init_c_against_rej(rej_text, original, content)
+        # And the other direction: SukiSU-only calls the hunks don't
+        # mention (like ksu_extension_init() / ksu_extension_exit()) must
+        # all still be there. Only the late-load block may lose calls
+        # (its normal-boot arm is checked separately above).
+        problems += self._check_init_c_untouched_calls(rej_text, original, content)
         if problems:
             for p in problems:
                 logger.error(f"kernel/core/init.c recovery: {p}")
@@ -3342,6 +3431,43 @@ CONFIG_CIFS_XATTR=y
                 problems.append(
                     f"{body!r}: the rejected hunks expect it {want} time(s), "
                     f"the recovered file has it {have} time(s)"
+                )
+        return problems
+
+    @classmethod
+    def _check_init_c_untouched_calls(cls, rej_text: str, before: str, after: str) -> list:
+        # Every call/#include in init.c (as `patch` left it) that the
+        # rejected hunks neither add nor remove, and that isn't inside
+        # the `if (ksu_late_loaded) { ... } else { ... }` block (which
+        # the recovery replaces on purpose), must appear the same number
+        # of times after recovery. Catches SukiSU-only calls that a
+        # fixed-string edit would otherwise drop without a word.
+        touched = set()
+        for line in rej_text.splitlines():
+            if line.startswith(('+++', '---')) or line[:1] not in '+-':
+                continue
+            touched.add(line[1:].strip())
+        m = re.search(
+            r'    if \(ksu_late_loaded\) \{.*?\n\nvoid __exit kernelsu_exit\(void\)\n\{\n',
+            before, re.DOTALL,
+        )
+        outside = before if not m else before[:m.start()] + before[m.end():]
+
+        def count(text, body):
+            return sum(1 for l in text.splitlines() if l.strip() == body)
+
+        problems = []
+        seen = set()
+        for l in outside.splitlines():
+            body = l.strip()
+            if body in seen or body in touched or not cls._INIT_C_CALL.match(body):
+                continue
+            seen.add(body)
+            want, have = count(outside, body), count(after, body)
+            if have != want:
+                problems.append(
+                    f"{body!r}: SukiSU has it {want} time(s) outside the late-load "
+                    f"block, the recovered file has it {have} time(s)"
                 )
         return problems
 
@@ -4982,9 +5108,37 @@ CONFIG_CIFS_XATTR=y
         if not image_dir.exists():
             return
         self._chdir(image_dir)
-        self._run_cmd(f"curl -LSs {KPM_PATCH_URL} -o patch && chmod 777 patch && ./patch", check=False)
-        if (image_dir / "oImage").exists():
-            self._run_cmd("mv oImage Image", check=False)
+        # The patcher is pinned (KPM_PATCH_REF, top of this file) and verified by sha256
+        # before it runs: it rewrites the finished Image, so an unnoticed
+        # upstream change here ships a kernel that may not boot.
+        patcher = image_dir / "patch"
+        if patcher.exists():
+            patcher.unlink()
+        stale = image_dir / "oImage"
+        if stale.exists():
+            stale.unlink()
+        self._run_cmd(f"curl -LSsf {KPM_PATCH_URL} -o patch", check=False)
+        import hashlib
+        digest = hashlib.sha256(patcher.read_bytes()).hexdigest() if patcher.exists() else ""
+        if digest != KPM_PATCH_SHA256:
+            self._mark("kpm_image_patch", "failed", f"patch_linux sha256 mismatch ({digest[:12] or 'download failed'})")
+            raise RuntimeError(
+                f"KPM patcher (SukiSU_patch {KPM_PATCH_REF[:12]} kpm/patch_linux) "
+                f"download failed or its sha256 doesn't match KPM_PATCH_SHA256 "
+                f"(got {digest or 'nothing'}). Refusing to patch the Image with an "
+                f"unknown binary. Stopping."
+            )
+        patcher.chmod(0o755)
+        result = self._run_cmd("./patch", check=False)
+        if result.returncode != 0 or not stale.exists():
+            self._mark("kpm_image_patch", "failed", f"patch_linux exit {result.returncode}")
+            raise RuntimeError(
+                f"KPM patcher failed (exit code {result.returncode}, oImage "
+                f"{'present' if stale.exists() else 'missing'}). The Image would "
+                f"ship without KPM. Stopping."
+            )
+        self._run_cmd("mv oImage Image", check=False)
+        self._mark("kpm_image_patch", "applied", f"SukiSU_patch {KPM_PATCH_REF[:12]} patch_linux")
 
     def prepare_boot_images(self) -> list:
         logger.info("=== Preparing boot images ===")

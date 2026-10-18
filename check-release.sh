@@ -305,6 +305,64 @@ else
     echo "  HEAD   ${SUSFS_HEAD:0:8}  (same as last build)"
 fi
 
+# susfs_same_code <old> <new>: true when everything under kernel_patches/ is
+# the same code - only .patch files differ, and only in line numbers, index
+# lines and unchanged context lines (a "rebase onto 5.15.X" commit). Such a
+# commit adds nothing to the kernel, but its new context can stop fitting our
+# sub_level (054b2432 "rebase onto 5.15.211" failed on fs/namespace.c on 220).
+susfs_same_code() {
+    local old="$1" new="$2" f
+    while read -r f; do
+        [ -n "$f" ] || continue
+        case "$f" in *.patch) ;; *) return 1 ;; esac
+        python3 - "$SUSFS" "$old" "$new" "$f" <<'PY' || return 1
+import subprocess, sys
+repo, old, new, path = sys.argv[1:]
+def body(ref):
+    r = subprocess.run(["git", "-C", repo, "show", f"{ref}:{path}"],
+                       capture_output=True, text=True)
+    if r.returncode != 0:
+        return None
+    # only the lines the patch adds/removes, per file - not context/@@/index
+    out, cur = [], None
+    for l in r.stdout.splitlines():
+        if l.startswith("+++ ") or l.startswith("--- "):
+            if l.startswith("+++ "):
+                cur = l[4:].split("\t")[0]
+            continue
+        if l.startswith(("+", "-")):
+            out.append((cur, l))
+    return out
+a, b = body(old), body(new)
+sys.exit(0 if a is not None and a == b else 1)
+PY
+    done < <(git -C "$SUSFS" diff --name-only "$old" "$new" -- kernel_patches/ 2>/dev/null)
+    return 0
+}
+
+# Walk back from HEAD through commits that are only re-bases and take the
+# oldest one with HEAD's code: the pin itself if nothing real changed, or
+# e.g. 2ad29735 instead of 054b2432 when only a re-base came after it.
+if [ -n "$SUSFS_PIN" ] && [ "$SUSFS_HEAD" != "$SUSFS_PIN_K" ]; then
+    SUSFS_CODE_OF="$SUSFS_HEAD"
+    while read -r c; do
+        [ -n "$c" ] || continue
+        p="$(sha_of "$SUSFS" "$c^")"
+        [ -n "$p" ] && susfs_same_code "$p" "$SUSFS_CODE_OF" || break
+        SUSFS_HEAD="$p"
+    done < <(git -C "$SUSFS" rev-list --first-parent "$SUSFS_PIN_K..$SUSFS_CODE_OF" 2>/dev/null)
+    if [ "$SUSFS_HEAD" != "$SUSFS_CODE_OF" ]; then
+        echo
+        ok "susfs ${SUSFS_CODE_OF:0:8} only re-bases its patches (line numbers / context)."
+        if [ "$SUSFS_HEAD" = "$SUSFS_PIN_K" ]; then
+            echo "        No new code - keeping the known-good susfs ${SUSFS_HEAD:0:8}."
+        else
+            echo "        Using ${SUSFS_HEAD:0:8} instead: same code as HEAD, older patch context."
+        fi
+        echo "        A re-based patch can stop fitting our kernel sub_level."
+    fi
+fi
+
 # ---- 3. the real test: apply + run the pipeline's own recovery ---------------
 KSU_PATCH_REL="kernel_patches/KernelSU/10_enable_susfs_for_ksu.patch"
 
