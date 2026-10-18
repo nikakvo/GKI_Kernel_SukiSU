@@ -342,8 +342,8 @@ patch_test() {
         echo "  $n_failed hunk(s) failed in: ${failed_files:-?}"
     fi
     # Same code the build runs: the drift recovery (only when hunks failed),
-    # then _disable_susfs_preinit() + _fixup_susfs_sucompat_util_h() on every
-    # SUSFS build.
+    # then _disable_susfs_preinit() + _fixup_susfs_sucompat_util_h() +
+    # _disable_susfs_mount_hide() on every SUSFS build.
     rec="$(cd "$BUILDER_DIR" && python3 - "$WORKTREE" "$rc" 2>/dev/null <<'PY'
 import sys, logging
 # Only the recovery's own ERROR lines (why it refused) are passed through,
@@ -363,6 +363,9 @@ if ok and not kb.KernelBuilder._disable_susfs_preinit(b, tree):
     ok = False
 if ok and not kb.KernelBuilder._fixup_susfs_sucompat_util_h(b, tree):
     print("REASON=feature/sucompat.c: userspace_stack_buffer() not reachable (_fixup_susfs_sucompat_util_h)")
+    ok = False
+if ok and not kb.KernelBuilder._disable_susfs_mount_hide(b, tree):
+    print("REASON=feature/mount_hide: Kbuild/header in an unknown shape (_disable_susfs_mount_hide)")
     ok = False
 print("RECOVERY=" + ("True" if ok else "False"))
 PY
@@ -396,6 +399,7 @@ KNOWN_DRIFT_kernel_core_init_c="_recover_susfs_init_c"
 KNOWN_DRIFT_kernel_feature_selinux_hide_c="_recover_susfs_selinux_hide_c"
 KNOWN_DRIFT_kernel_runtime_ksud_integration_c="_recover_susfs_ksud_integration_c"
 KNOWN_DRIFT_kernel_supercall_dispatch_c="_recover_susfs_dispatch_c"
+KNOWN_DRIFT_kernel_hook_setuid_hook_c="_recover_susfs_setuid_hook_c"
 drift_report() {
     local f log key known
     [ -n "$1" ] || return 0

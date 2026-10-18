@@ -2426,6 +2426,14 @@ CONFIG_CIFS_XATTR=y
                 "defines it nor can get it from include/util.h in a known way "
                 "(_fixup_susfs_sucompat_util_h). Stopping."
             )
+        if not self._disable_susfs_mount_hide(ksu_dir):
+            self._mark("susfs_kernelsu_integration", "failed", "unknown mount_hide shape")
+            raise RuntimeError(
+                "SukiSU-Ultra's feature/mount_hide (kernel/Kbuild or "
+                "feature/mount_hide.h) is in a shape _disable_susfs_mount_hide() "
+                "doesn't know. mount_hide needs hook/<arch>/patch_memory.o, which "
+                "the SUSFS patch removes, so building it would fail to link. Stopping."
+            )
         self._mark("susfs_kernelsu_integration", "applied", src_note)
 
     def _recover_susfs_init_c(self, ksu_dir) -> bool:
@@ -2491,6 +2499,12 @@ CONFIG_CIFS_XATTR=y
         dispatch_rej = ksu_dir / "kernel/supercall/dispatch.c.rej"
         if dispatch_rej.exists():
             if not self._recover_susfs_dispatch_c(ksu_dir):
+                return False
+        # kernel/hook/setuid_hook.c (SukiSU's mount_hide.h include) - see
+        # _recover_susfs_setuid_hook_c.
+        setuid_rej = ksu_dir / "kernel/hook/setuid_hook.c.rej"
+        if setuid_rej.exists():
+            if not self._recover_susfs_setuid_hook_c(ksu_dir):
                 return False
 
         init_c = ksu_dir / "kernel/core/init.c"
@@ -3056,6 +3070,139 @@ CONFIG_CIFS_XATTR=y
             "because SukiSU-Ultra added a preinit flag to do_get_info(). Removed the "
             "ksu_bundled/ksu_late_loaded blocks as the hunk wanted and kept the preinit "
             "flag without the ksu_late_loaded test (see _recover_susfs_dispatch_c)."
+        )
+        return True
+
+    # SukiSU-Ultra's mount view hiding (cf41f112, 2026-10).
+    _SETUID_UMOUNT_INCLUDE = '#include "feature/kernel_umount.h"\n'
+    _SETUID_MOUNT_HIDE_INCLUDE = '#include "feature/mount_hide.h"\n'
+
+    def _recover_susfs_setuid_hook_c(self, ksu_dir) -> bool:
+        # Known, narrow drift point #5: SukiSU-Ultra cf41f112 ("mount view
+        # hiding for isolated processes", #947) added
+        # `#include "feature/mount_hide.h"` right after
+        # `#include "feature/kernel_umount.h"` in hook/setuid_hook.c - inside
+        # the context of the susfs hunk that rewrites ksu_handle_setresuid(),
+        # so that hunk is rejected. (Its ksu_mount_hide_init()/_exit() calls
+        # sit after the hunk and apply fine.)
+        #
+        # Recovery: take the include out, the region must then match the
+        # rejected hunk's "old" side exactly once, swap in its "new" side,
+        # put the include back after kernel_umount.h. In a SUSFS build the
+        # header gives empty stubs (see _disable_susfs_mount_hide). Any
+        # other drift -> False, build hard-fails.
+        target = ksu_dir / "kernel/hook/setuid_hook.c"
+        rej = ksu_dir / "kernel/hook/setuid_hook.c.rej"
+        if not target.exists() or not rej.exists():
+            return False
+
+        hunks = []
+        cur = None
+        for line in rej.read_text().splitlines(keepends=True):
+            if line.startswith('@@'):
+                cur = {'old': [], 'new': []}
+                hunks.append(cur)
+                continue
+            if cur is None or line.startswith('\\'):
+                continue
+            tag, body = line[:1], line[1:]
+            if tag in (' ', '-'):
+                cur['old'].append(body)
+            if tag in (' ', '+'):
+                cur['new'].append(body)
+        if len(hunks) != 1:
+            return False
+        old, new = ''.join(hunks[0]['old']), ''.join(hunks[0]['new'])
+
+        content = target.read_text()
+        pair = self._SETUID_UMOUNT_INCLUDE + self._SETUID_MOUNT_HIDE_INCLUDE
+        if content.count(self._SETUID_MOUNT_HIDE_INCLUDE) != 1 or content.count(pair) != 1:
+            return False
+        content = content.replace(pair, self._SETUID_UMOUNT_INCLUDE, 1)
+
+        if content.count(old) != 1:
+            return False
+        content = content.replace(old, new, 1)
+
+        if content.count(self._SETUID_UMOUNT_INCLUDE) != 1:
+            return False
+        content = content.replace(self._SETUID_UMOUNT_INCLUDE, pair, 1)
+        # SukiSU's init/exit calls (outside the hunk) must still be there.
+        if content.count('ksu_mount_hide_init();') != 1 or content.count('ksu_mount_hide_exit();') != 1:
+            return False
+
+        target.write_text(content)
+        rej.unlink()
+        orig = ksu_dir / "kernel/hook/setuid_hook.c.orig"
+        if orig.exists():
+            orig.unlink()
+        logger.info(
+            "kernel/hook/setuid_hook.c: SUSFS<->KernelSU patch hunk didn't match because "
+            'SukiSU-Ultra added #include "feature/mount_hide.h". Applied the hunk and put '
+            "the include back (see _recover_susfs_setuid_hook_c)."
+        )
+        return True
+
+    _KBUILD_MOUNT_HIDE_OBJ = 'kernelsu-objs += feature/mount_hide.o\n'
+    _MOUNT_HIDE_DECLS = (
+        'void ksu_mount_hide_init(void);\n'
+        'void ksu_mount_hide_exit(void);\n'
+    )
+
+    def _disable_susfs_mount_hide(self, ksu_dir) -> bool:
+        # SukiSU-Ultra's mount view hiding (cf41f112) cannot be built in a
+        # SUSFS build: feature/mount_hide.c swaps the .open slots of the
+        # /proc/<pid>/mounts* file_operations with ksu_patch_text(), which
+        # lives in hook/<arch>/patch_memory.c - an object the
+        # 10_enable_susfs_for_ksu.patch Kbuild hunk drops. mount_hide.o
+        # would fail to link (undefined ksu_patch_text). SUSFS hides
+        # mounts its own way (sus_mount + umount at zygote setresuid).
+        #
+        # So: drop mount_hide.o from kernel/Kbuild and turn the two
+        # functions in feature/mount_hide.h (only setuid_hook.c calls
+        # them) into empty static inline stubs. The feature handler is
+        # then never registered, so the manager sees "Hide suspicious
+        # mounts" as unsupported - which is the truth. Runs on every
+        # SUSFS build. No mount_hide in Kbuild (older SukiSU) or
+        # patch_memory.o still built (it could link then) -> nothing to
+        # do. Unknown shape -> False, build hard-fails.
+        kbuild = ksu_dir / "kernel/Kbuild"
+        header = ksu_dir / "kernel/feature/mount_hide.h"
+        if not kbuild.exists():
+            return False
+        ktext = kbuild.read_text()
+        htext = header.read_text() if header.exists() else ''
+        if 'KSU_SUSFS_NO_MOUNT_HIDE' in ktext:
+            return 'KSU_SUSFS_NO_MOUNT_HIDE' in htext  # already done
+        if 'feature/mount_hide.o' not in ktext:
+            return True
+        if 'patch_memory.o' in ktext:
+            return True  # ksu_patch_text is built, mount_hide can link
+        if ktext.count(self._KBUILD_MOUNT_HIDE_OBJ) != 1 or ktext.count('feature/mount_hide.o') != 1:
+            return False
+        if htext.count(self._MOUNT_HIDE_DECLS) != 1:
+            return False
+        ktext = ktext.replace(
+            self._KBUILD_MOUNT_HIDE_OBJ,
+            '# KSU_SUSFS_NO_MOUNT_HIDE: feature/mount_hide.o needs ksu_patch_text()\n'
+            '# from hook/<arch>/patch_memory.o, which the SUSFS patch drops, see\n'
+            '# _disable_susfs_mount_hide in the GKI pipeline\'s kernel_builder.py.\n',
+            1,
+        )
+        htext = htext.replace(
+            self._MOUNT_HIDE_DECLS,
+            '/* KSU_SUSFS_NO_MOUNT_HIDE: not built in a SUSFS kernel (needs\n'
+            ' * hook/<arch>/patch_memory.o, which the SUSFS patch drops). */\n'
+            'static inline void ksu_mount_hide_init(void) {}\n'
+            'static inline void ksu_mount_hide_exit(void) {}\n',
+            1,
+        )
+        kbuild.write_text(ktext)
+        header.write_text(htext)
+        logger.info(
+            "kernel/Kbuild: SukiSU-Ultra mount view hiding (feature/mount_hide.o) compiled out - "
+            "it needs hook/<arch>/patch_memory.o, which the SUSFS patch removes "
+            "(see _disable_susfs_mount_hide)."
         )
         return True
 
