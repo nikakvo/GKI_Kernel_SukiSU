@@ -1157,6 +1157,17 @@ CONFIG_CIFS_XATTR=y
         marker = '/* KSU_KPM_UAPI_FIXUP: '
         inc = '#include "uapi/supercall.h"\n'
         c_text, h_text = kpm_c.read_text(), kpm_h.read_text()
+        # Upstream fixed it in 36cff30c (2026-10-19) by moving the KPM
+        # constants to uapi/extension.h and including that from kpm.h.
+        # If any uapi header that kpm.h/kpm.c already includes defines
+        # SUKISU_KPM_LOAD, there is nothing to restore.
+        uapi_dir = ksu_dir / "uapi"
+        if not uapi_dir.is_dir():
+            uapi_dir = ksu_dir / "kernel/include/uapi"
+        for m in re.finditer(r'#include "uapi/([\w.]+)"', h_text + c_text):
+            hdr = uapi_dir / m.group(1)
+            if hdr.is_file() and 'SUKISU_KPM_LOAD' in hdr.read_text():
+                return True
         need_inc = 'SUKISU_KPM_' in c_text and inc not in c_text and inc not in h_text
         need_def = (
             'CMD_KPM_CONTROL' in c_text
