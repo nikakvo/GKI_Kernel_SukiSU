@@ -123,6 +123,10 @@ sync_repo() {   # $1=url $2=dir $3=label
 }
 sync_repo "$SUKI_URL"  "$SUKI"  "SukiSU-Ultra" || exit 1
 sync_repo "$SUSFS_URL" "$SUSFS" "susfs4ksu"    || exit 1
+# KPM image patcher (informational only, never stops the run)
+SKPATCH_URL="https://github.com/ShirkNeko/SukiSU_patch.git"
+SKPATCH="$CACHE/SukiSU_patch"
+sync_repo "$SKPATCH_URL" "$SKPATCH" "SukiSU_patch (KPM patcher)" || SKPATCH=""
 
 sha_of()   { git -C "$1" rev-parse -q --verify "$2^{commit}" 2>/dev/null; }
 
@@ -362,6 +366,55 @@ if [ -n "$SUSFS_PIN" ] && [ "$SUSFS_HEAD" != "$SUSFS_PIN_K" ]; then
         echo "        A re-based patch can stop fitting our kernel sub_level."
     fi
 fi
+
+# ---- 2b. KPM patcher (SukiSU_patch kpm/) - information only -----------------
+# The build uses ONE pinned version of SukiSU_patch's kpm/patch_linux
+# (KPM_PATCH_REF in kernel_builder.py). This only tells you when upstream has
+# published something newer, so it can be boot-tested. It never changes the
+# verdict below and never changes the pin.
+# Patcher versions known to make a kernel that doesn't boot on our phone:
+KPM_PATCH_BROKEN="7c6289c"   # 2026-10-18 "更新KPM": kpimg version 0, bootloop at POCO logo
+kpm_patcher_report() {
+    local pin pin_full head newer c short known
+    pin="$(sed -n 's/^KPM_PATCH_REF = "\([0-9a-f]*\)".*/\1/p' "$BUILDER_DIR/kernel_builder.py" 2>/dev/null | head -n 1)"
+    hdr "KPM patcher (SukiSU_patch kpm/)"
+    if [ -z "$SKPATCH" ] || [ -z "$pin" ]; then
+        warn "Could not check (no SukiSU_patch copy or no KPM_PATCH_REF in kernel_builder.py)."
+        return 0
+    fi
+    pin_full="$(sha_of "$SKPATCH" "$pin")"
+    head="$(git -C "$SKPATCH" log -1 --format=%H origin/main -- kpm/ 2>/dev/null)"
+    if [ -z "$pin_full" ] || [ -z "$head" ]; then
+        warn "Could not find the pinned patcher ${pin:0:8} or kpm/ history in SukiSU_patch."
+        return 0
+    fi
+    echo "  pinned  $(git -C "$SKPATCH" log -1 --date=short --format='%h   %ad   %s' "$pin_full")"
+    if [ "$head" = "$pin_full" ]; then
+        ok "No newer KPM patcher upstream."
+        return 0
+    fi
+    newer=0
+    while read -r c; do
+        [ -n "$c" ] || continue
+        short="${c:0:7}"; known=""
+        case " $KPM_PATCH_BROKEN " in *" $short "*) known=1 ;; esac
+        if [ -n "$known" ]; then
+            echo "  newer   $(git -C "$SKPATCH" log -1 --date=short --format='%h   %ad   %s' "$c")   ${D:-}(known broken - bootloop)${N}"
+        else
+            echo "  ${B}NEW${N}     $(git -C "$SKPATCH" log -1 --date=short --format='%h   %ad   %s' "$c")"
+            newer=$((newer + 1))
+        fi
+    done < <(git -C "$SKPATCH" log --format=%H "$pin_full..origin/main" -- kpm/ 2>/dev/null)
+    if [ "$newer" -gt 0 ]; then
+        warn "A new KPM patcher was published. The build still uses ${pin:0:7}."
+        echo "        Send this output for a look - it needs a test build and"
+        echo "        'fastboot boot boot.img' before it can replace the pin."
+        echo "        https://github.com/ShirkNeko/SukiSU_patch/commits/main/kpm"
+    else
+        ok "Only known-broken patcher versions are newer - staying on ${pin:0:7}."
+    fi
+}
+kpm_patcher_report
 
 # ---- 3. the real test: apply + run the pipeline's own recovery ---------------
 KSU_PATCH_REL="kernel_patches/KernelSU/10_enable_susfs_for_ksu.patch"
