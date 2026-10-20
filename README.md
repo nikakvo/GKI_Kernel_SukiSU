@@ -1,3 +1,5 @@
+  <p align="center"><img src="gki-kernel.png" alt="GKI Kernel SukiSU"></p>
+
 # GKI SukiSU-Ultra + SUSFS Build System — Poco F6 Pro
 
 An automated build system for **GKI kernels** with **SukiSU-Ultra** and **SUSFS**, built and daily-driven on the **Poco F6 Pro / Redmi K70 (`vermeer`)**.
