@@ -1,4 +1,4 @@
-  <p align="center"><img src="gki-kernel.png" alt="GKI Kernel SukiSU"></p>
+<p align="center"><img src="gki-kernel-v2.png" alt="GKI Kernel SukiSU"></p>
 
 # GKI SukiSU-Ultra + SUSFS Build System — Poco F6 Pro
 
