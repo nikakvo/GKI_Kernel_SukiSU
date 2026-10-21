@@ -2129,6 +2129,22 @@ CONFIG_CIFS_XATTR=y
         include_line = "#include <trace/hooks/blk.h>\n"
         if include_line not in content:
             return False
+        # Newer susfs patches (054b2432+, re-based onto 5.15.211) already
+        # carry this include in their fs/namespace.c context. Removing it
+        # then breaks hunk #1 instead of fixing it - leave the file alone.
+        patch_file = self.work_dir / "common" / self.config.get_susfs_patch_filename()
+        if patch_file.exists():
+            ptxt = patch_file.read_text(errors="surrogateescape")
+            ns = ptxt.find("diff --git a/fs/namespace.c")
+            if ns != -1:
+                nxt = ptxt.find("\ndiff --git ", ns + 1)
+                section = ptxt[ns:nxt if nxt != -1 else len(ptxt)]
+                if "\n " + include_line in section:
+                    logger.info(
+                        "fs/namespace.c: SUSFS patch already expects "
+                        "'trace/hooks/blk.h' in its context - include left in place"
+                    )
+                    return False
         namespace_c.write_text(content.replace(include_line, "", 1))
         logger.info(
             "fs/namespace.c: temporarily removed 'trace/hooks/blk.h' include "
@@ -2321,6 +2337,7 @@ CONFIG_CIFS_XATTR=y
 
         self._fix_namei_c_set_nameidata_arity()
         self._fix_vm_flags_clear_compat()
+        self._fixup_susfs_exec_c_no_preinit(common_dir)
 
         if result.returncode != 0:
             self._mark("susfs", "failed", f"patch exit code {result.returncode}")
@@ -2331,6 +2348,37 @@ CONFIG_CIFS_XATTR=y
                 f"check the build log above for rejected hunks."
             )
         self._mark("susfs", "applied")
+
+    def _fixup_susfs_exec_c_no_preinit(self, common_dir) -> bool:
+        """Newer susfs (3ebb8a6+) wires SukiSU/KernelSU module preinit into
+        fs/exec.c, guarded by #ifndef KSU_NO_PREINIT. Our SUSFS builds compile
+        preinit out of drivers/kernelsu (-DKSU_NO_PREINIT, see
+        _disable_susfs_preinit), so preinit/preinit.o is not built and
+        exec.c's calls to ksu_setup_preinit_file() /
+        ksu_preinit_handle_post_execveat() would be undefined at link time.
+        Give fs/exec.o the same define. No-op for older susfs (no such
+        guard in exec.c) and idempotent."""
+        exec_c = Path(common_dir) / "fs/exec.c"
+        makefile = Path(common_dir) / "fs/Makefile"
+        if not exec_c.exists() or not makefile.exists():
+            return False
+        if self._keep_susfs_preinit():
+            return True  # preinit is built, exec.c may call into it
+        if "#ifndef KSU_NO_PREINIT" not in exec_c.read_text(errors="surrogateescape"):
+            return True
+        mk = makefile.read_text()
+        line = "CFLAGS_exec.o += -DKSU_NO_PREINIT\n"
+        if line in mk:
+            return True
+        if not mk.endswith("\n"):
+            mk += "\n"
+        mk += ("# KSU_SUSFS_NO_PREINIT: preinit is compiled out of drivers/kernelsu\n"
+               "# in SUSFS builds, keep exec.c from calling into it.\n" + line)
+        makefile.write_text(mk)
+        logger.info("fs/Makefile: fs/exec.o built with -DKSU_NO_PREINIT "
+                    "(susfs preinit hooks compiled out, see _fixup_susfs_exec_c_no_preinit)")
+        self._mark("susfs_exec_no_preinit", "applied")
+        return True
 
     _SELINUX_HIDE_GUARD_FIXES = [
         (
@@ -3031,7 +3079,12 @@ CONFIG_CIFS_XATTR=y
         # stub (see _disable_susfs_preinit).
         release = 'ksu_preinit_release();\n'
         preinit_spots = []
-        for nxt in ('ksu_selinux_hide_handle_second_stage();\n', 'on_post_fs_data();\n'):
+        # Newer susfs (3ebb8a6+) was rebased onto a KernelSU that already
+        # has preinit: the hunk itself removes and re-adds the
+        # ksu_preinit_release() calls. Only strip/re-add them ourselves
+        # when the hunk does not know about them.
+        rej_knows_preinit = release in old and release in new
+        for nxt in (() if rej_knows_preinit else ('ksu_selinux_hide_handle_second_stage();\n', 'on_post_fs_data();\n')):
             pair = ' ' * 12 + release + ' ' * 12 + nxt
             n = content.count(pair)
             if n > 1:
@@ -3039,7 +3092,7 @@ CONFIG_CIFS_XATTR=y
             if n == 1:
                 content = content.replace(pair, ' ' * 12 + nxt, 1)
                 preinit_spots.append(nxt)
-        if release in content:
+        if release in content and not rej_knows_preinit:
             # a ksu_preinit_release() somewhere we don't know about
             return False
 
@@ -3347,7 +3400,41 @@ CONFIG_CIFS_XATTR=y
     # into kernelsu and swaps it in for PID 1's selinux_setup execve.
     _KBUILD_PREINIT_IF = 'ifneq ($(wildcard $(KSU_UAPI_INC)/linux/unistd.h),)\n'
 
+    def _susfs_wires_preinit(self) -> bool:
+        """True when the susfs kernel-side patch (50_add_susfs_in_gki-*)
+        itself wires SukiSU/KernelSU module preinit into fs/exec.c
+        (susfs 3ebb8a6+, calls ksu_setup_preinit_file()), so preinit can
+        work in a SUSFS build. Older susfs -> False. Also False when this
+        object was made without __init__ (check-release.sh's patch test),
+        which keeps its verdict exactly as before."""
+        susfs_dir = getattr(self, "susfs_dir", None)
+        config = getattr(self, "config", None)
+        if susfs_dir is None or config is None:
+            return False
+        try:
+            patch = Path(susfs_dir) / "kernel_patches" / config.get_susfs_patch_filename()
+            return "ksu_setup_preinit_file" in patch.read_text(errors="surrogateescape")
+        except Exception:
+            return False
+
+    def _keep_susfs_preinit(self) -> bool:
+        """Build SukiSU module preinit in a SUSFS build: only when susfs
+        wires it (see _susfs_wires_preinit) and SUSFS_NO_PREINIT=1 is not
+        set in the environment (that forces the old preinit-off build,
+        e.g. to tell a preinit bootloop from anything else)."""
+        if os.environ.get("SUSFS_NO_PREINIT", "").strip() in ("1", "yes", "true"):
+            return False
+        return self._susfs_wires_preinit()
+
     def _disable_susfs_preinit(self, ksu_dir) -> bool:
+        if self._keep_susfs_preinit():
+            logger.info(
+                "kernel/Kbuild: SukiSU-Ultra module preinit KEPT - this susfs wires it "
+                "into fs/exec.c (set SUSFS_NO_PREINIT=1 to build without it)"
+            )
+            if hasattr(self, "_mark"):
+                self._mark("susfs_preinit", "enabled", "susfs wires preinit via fs/exec.c")
+            return True
         # SukiSU-Ultra's module preinit cannot work in a SUSFS build:
         # its only entry point, ksu_preinit_handle_execve(), is called
         # from hook/syscall_event_bridge.c, and preinit.c itself uses
