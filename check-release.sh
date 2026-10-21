@@ -70,6 +70,8 @@ fi
 ok()   { echo "  ${G}OK${N}    $*"; }
 warn() { echo "  ${Y}WARN${N}  $*"; }
 bad()  { echo "  ${R}STOP${N}  $*"; }
+# a combination that was tried and doesn't fit - not the final verdict
+tried() { echo "  ${Y}NO FIT${N} $*"; }
 hdr()  { echo; echo "${B}=== $* ===${N}"; }
 
 for c in git patch python3; do
@@ -560,7 +562,7 @@ SUSFS_USE="$SUSFS_HEAD"
 patch_test "$SUSFS_HEAD"
 case "$VERDICT" in
     CLEAN|RECOVERED) ok "$DETAIL" ;;
-    *)               bad "$DETAIL"; drift_report "$LAST_FAILED" ;;
+    *)               tried "$DETAIL"; drift_report "$LAST_FAILED" ;;
 esac
 TRY_FALLBACK=1
 if [ "$VERDICT" = "STOP" ] && [ "$PATCH_SAME" = 1 ]; then
@@ -584,7 +586,7 @@ if [ "$VERDICT" = "STOP" ] && [ "$TRY_FALLBACK" = 1 ]; then
         other="$(git -C "$SUSFS" show --name-only --format= "$c" | grep -vxF "$KSU_PATCH_REL" | grep -c . || true)"
         if [ "$other" != "0" ]; then
             echo
-            bad "susfs $(git -C "$SUSFS" log -1 --format='%h "%s"' "$c")"
+            tried "susfs $(git -C "$SUSFS" log -1 --format='%h "%s"' "$c")"
             echo "        changes the KernelSU patch AND the kernel side together - not safe to split."
             break
         fi
@@ -604,8 +606,36 @@ if [ "$VERDICT" = "STOP" ] && [ "$TRY_FALLBACK" = 1 ]; then
             done
             break
         fi
-        bad "$DETAIL"
+        tried "$DETAIL"
     done
+fi
+
+# ---- 3c. fallback: new SukiSU + the known-good susfs pin ---------------------
+# susfs sometimes reworks its patches in a way that needs new recovery work
+# (or that doesn't fit our kernel sub_level yet), while SukiSU itself moved
+# only a little. Then the new SukiSU can still be built with the susfs that
+# already works on the phone - same SUSFS code as the current kernel. The
+# newer susfs waits for a separate look.
+SUSFS_HELD=0
+if [ "$VERDICT" = "STOP" ] && [ "$PATCH_SAME" = 0 ] && [ -n "$SUSFS_PIN_FULL" ] && \
+   [ "$SUSFS_HEAD" != "$SUSFS_PIN_K" ]; then
+    PIN_PATCH_REF="$(susfs_p "$SUSFS_PIN_FULL")"; : "${PIN_PATCH_REF:=$SUSFS_PIN_K}"
+    hdr "Fallback: ${CAND_LABEL} ${CAND_SHA:0:8} + known-good susfs $(short_susfs "$SUSFS_PIN_FULL")"
+    patch_test "$PIN_PATCH_REF"
+    if [ "$VERDICT" = "CLEAN" ] || [ "$VERDICT" = "RECOVERED" ]; then
+        ok "$DETAIL"
+        SUSFS_USE="$SUSFS_PIN_FULL"
+        SUSFS_HELD=1
+        echo
+        echo "  The newer susfs ${SUSFS_HEAD:0:8} doesn't fit yet, so this build keeps the"
+        echo "  susfs your current kernel already uses ($(short_susfs "$SUSFS_PIN_FULL")) - same SUSFS code,"
+        echo "  nothing changes on the SUSFS side. Only SukiSU moves forward."
+        echo "  Send this output if you want the newer susfs looked at."
+    else
+        tried "$DETAIL"
+        PATCH_SAME=1   # same susfs patch as last time: any drift is SukiSU's
+        drift_report "$LAST_FAILED"
+    fi
 fi
 
 SUSFS_NEW=0
@@ -643,6 +673,8 @@ if [ "$KSU_NEW" = 0 ] && [ "$SUSFS_NEW" = 0 ]; then
     echo "  Rebuild command, if you need it (new kernel sub_level etc.):"
 else
     ok "Something new and it patches cleanly. ${B}Build this:${N}"
+    [ "$SUSFS_HELD" = 1 ] && \
+        echo "        (new SukiSU, susfs stays on $(short_susfs "$SUSFS_USE") - newer susfs ${SUSFS_HEAD:0:8} doesn't fit yet)"
 fi
 
 if [ "$CAND_CODE" = "?" ]; then
