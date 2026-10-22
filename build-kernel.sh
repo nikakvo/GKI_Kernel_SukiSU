@@ -134,6 +134,13 @@ while [ "$#" -gt 0 ]; do
             PIDS_CLI="1"
             shift
             ;;
+        --kpm-next)
+            # Newer KernelPatch (0.13.9) for KPM: pinned kptools + kpimg
+            # instead of SukiSU_patch's patch_linux (see KPM_NEXT_* at the
+            # top of kernel_builder.py). Default stays the 547ae94 patcher.
+            export KPM_NEXT=1
+            shift
+            ;;
         --no-ath9k)
             # ath9k_htc support needs a per-branch
             # ath9k_htc_no_mac80211_leds_<branch>.patch (the MAC80211_LEDS
@@ -145,7 +152,7 @@ while [ "$#" -gt 0 ]; do
             ;;
         *)
             echo "Unknown argument: $1"
-            echo "Usage: $0 [--ksu-commit <tag|commit|branch>] [--susfs-commit <commit|branch=commit,...|latest>] [--ksu-version-code <N>] [--no-hide-stuff] [--no-ath9k] [--pids]"
+            echo "Usage: $0 [--ksu-commit <tag|commit|branch>] [--susfs-commit <commit|branch=commit,...|latest>] [--ksu-version-code <N>] [--no-hide-stuff] [--no-ath9k] [--pids] [--kpm-next]"
             echo "Without pin flags, the known-good pins from .github/workflows/scripts/config.py are used."
             exit 1
             ;;
@@ -271,7 +278,7 @@ check_dependencies() {
         git curl wget zip unzip xz-utils openssl pixz
         ccache python3 python3-pip
         build-essential bc bison flex
-        libssl-dev libelf-dev rsync
+        libssl-dev libelf-dev rsync zlib1g-dev
     )
     local missing_apt=()
 
@@ -462,6 +469,7 @@ echo "  Sublevel: $SUB_LEVEL"
 echo "  OS Patch: $OS_PATCH"
 [ -n "$KERNEL_TAG" ] && echo "  Kernel Tag: $KERNEL_TAG"
 [ -n "$DROIDSPACES_PIDS" ] && echo "  Droidspaces pids: ON (experimental test build, files get -pids)"
+[ -n "$KPM_NEXT" ] && echo "  KPM: KernelPatch 0.13.9 (--kpm-next)"
 echo ""
 
 EXTRA_ARGS=()

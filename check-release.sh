@@ -695,6 +695,12 @@ if [ "$BRANCH" = "gki-android13-5.15" ]; then
     echo "  ${C}./build-kernel.sh --ksu-commit $CAND_SHA \\"
     echo "    --susfs-commit $SUSFS_USE \\"
     echo "    --ksu-version-code $CAND_CODE --pids${N}"
+    echo
+    echo "  ${Y}KPM next${N} - same --pids build with KernelPatch 0.13.9 for KPM"
+    echo "  (pinned kptools + kpimg, see KPM_NEXT_* in kernel_builder.py):"
+    echo "  ${C}./build-kernel.sh --ksu-commit $CAND_SHA \\"
+    echo "    --susfs-commit $SUSFS_USE \\"
+    echo "    --ksu-version-code $CAND_CODE --pids --kpm-next${N}"
 fi
 
 if [ "$KSU_NEW" = 1 ] || [ "$SUSFS_NEW" = 1 ]; then

@@ -195,16 +195,64 @@ else
     row bad "SUSFS v2.3.0" "CONFIG_KSU_SUSFS is not y - SUSFS is absent"
 fi
 
+# KPM. The KernelPatch version comes from ksud (needs root):
+#   3328 = 0.13.0 (default patcher), 3337 = 0.13.9 (--kpm-next builds).
+KSUD=/data/adb/ksud
+KP_VER=; KP_DOT=; KP_RAW=
+if cfg_is CONFIG_KPM y && [ -x "$KSUD" ] && [ "$(id -u)" = 0 ]; then
+    # ksud prints e.g. "3337 (17:50:49 Oct 17 2026)" - number, then build time
+    KP_RAW=$("$KSUD" kpm version 2>/dev/null | head -1)
+    KP_VER=$(printf '%s' "$KP_RAW" | sed -n 's/^[^0-9]*\([0-9][0-9]*\).*/\1/p')
+    [ -n "$KP_VER" ] && KP_DOT="$((KP_VER / 65536)).$(((KP_VER / 256) % 256)).$((KP_VER % 256))"
+fi
+
 if cfg_is CONFIG_KPM y; then
-    if grep -q sukisu_kpm_version /proc/kallsyms 2>/dev/null; then
-        row ok "KPM (Kernel Patch Module)" "CONFIG_KPM=y; sukisu_kpm_version in kallsyms"
+    if [ -n "$KP_DOT" ]; then
+        row ok "KPM: KernelPatch $KP_DOT" "CONFIG_KPM=y; ksud kpm version: $KP_RAW"
+    elif [ -n "$KP_RAW" ]; then
+        row ok "KPM: KernelPatch" "CONFIG_KPM=y; ksud kpm version: $KP_RAW"
+    elif [ "$(id -u)" != 0 ] || [ ! -x "$KSUD" ]; then
+        row na "KPM (Kernel Patch Module)" \
+            "CONFIG_KPM=y; version needs root and $KSUD - not available"
     else
-        row ok "KPM (Kernel Patch Module)" \
-            "CONFIG_KPM=y (symbol not in kallsyms - expected when SUSFS symbol hiding is on)"
+        row bad "KPM (Kernel Patch Module)" \
+            "CONFIG_KPM=y but '$KSUD kpm version' returns nothing - KernelPatch is not in this kernel image"
     fi
+    _kn=$([ -x "$KSUD" ] && "$KSUD" kpm num 2>/dev/null | tr -d '[:space:]')
+    case "$_kn" in
+        ''|*[!0-9]*) ;;
+        *) row ok "KPM: loaded modules" "$_kn KPM(s) loaded (ksud kpm num)" ;;
+    esac
 else
     row off "KPM (Kernel Patch Module)" "CONFIG_KPM not enabled in this build"
 fi
+
+# BTF lets KPMs look up kernel structures and offsets (KernelPatch 0.13.9+).
+if cfg_is CONFIG_KPM y; then
+    if [ -n "$KP_VER" ] && [ "$KP_VER" -lt 3337 ] 2>/dev/null; then
+        row off "KPM: BTF for KPMs" \
+            "KernelPatch $KP_DOT - BTF support for KPMs starts with 0.13.9 (--kpm-next builds)"
+    elif [ -r /sys/kernel/btf/vmlinux ]; then
+        row ok "KPM: BTF for KPMs" "/sys/kernel/btf/vmlinux present"
+    elif cfg_is CONFIG_DEBUG_INFO_BTF y; then
+        row bad "KPM: BTF for KPMs" "CONFIG_DEBUG_INFO_BTF=y but /sys/kernel/btf/vmlinux is missing"
+    else
+        row off "KPM: BTF for KPMs" "CONFIG_DEBUG_INFO_BTF not enabled"
+    fi
+fi
+
+# Module preinit. Available in SUSFS builds since v41038; earlier ones
+# compile it out (-DKSU_NO_PREINIT). Only visible in the boot log.
+_pre=$(dmesg 2>/dev/null | grep -iE 'preinit: (runner staged|exec runner)|KSU_NO_PREINIT' | tail -1)
+case "$_pre" in
+    *KSU_NO_PREINIT*)
+        row off "Module preinit" "compiled out in this build (KSU_NO_PREINIT)" ;;
+    *preinit:*)
+        row ok "Module preinit" "boot log: ${_pre#*] }" ;;
+    *)
+        row na "Module preinit" \
+            "no preinit lines in dmesg - needs root, and the ring buffer may have rolled since boot" ;;
+esac
 
 if grep -q ' /debug_ramdisk ' /proc/mounts 2>/dev/null; then
     row ok "Magic Mount" "/debug_ramdisk is mounted"
@@ -246,8 +294,8 @@ fi
 
 if cfg_is CONFIG_NET_SCH_CAKE y; then
     if have tc && [ "$(id -u)" = 0 ]; then
-        if tc qdisc add dev lo root cake 2>/dev/null; then
-            tc qdisc del dev lo root 2>/dev/null
+        if tc qdisc add dev lo root cake >/dev/null 2>&1; then
+            tc qdisc del dev lo root >/dev/null 2>&1
             row ok "CAKE qdisc" "CONFIG_NET_SCH_CAKE=y; attached to lo successfully"
         else
             row bad "CAKE qdisc" "CONFIG_NET_SCH_CAKE=y but 'tc qdisc add ... cake' failed"
@@ -263,8 +311,8 @@ check_cfg "WireGuard" CONFIG_WIREGUARD
 
 if cfg_is CONFIG_IP_SET y; then
     if have ipset && [ "$(id -u)" = 0 ]; then
-        if ipset create gkichk hash:ip 2>/dev/null; then
-            ipset destroy gkichk 2>/dev/null
+        if ipset create gkichk hash:ip >/dev/null 2>&1; then
+            ipset destroy gkichk >/dev/null 2>&1
             row ok "IP Set (netfilter)" "CONFIG_IP_SET=y; set created and destroyed"
         else
             row bad "IP Set (netfilter)" "CONFIG_IP_SET=y but 'ipset create' failed"
@@ -279,8 +327,8 @@ fi
 
 if cfg_is CONFIG_IP_NF_TARGET_TTL y || cfg_is CONFIG_NETFILTER_XT_TARGET_HL y; then
     if have iptables && [ "$(id -u)" = 0 ] &&
-       iptables -t mangle -A POSTROUTING -j TTL --ttl-set 65 2>/dev/null; then
-        iptables -t mangle -D POSTROUTING -j TTL --ttl-set 65 2>/dev/null
+       iptables -t mangle -A POSTROUTING -j TTL --ttl-set 65 >/dev/null 2>&1; then
+        iptables -t mangle -D POSTROUTING -j TTL --ttl-set 65 >/dev/null 2>&1
         row ok "TTL / Hop-Limit target" "rule added and removed successfully"
     else
         row ok "TTL / Hop-Limit target" \
@@ -292,8 +340,8 @@ fi
 
 if cfg_is CONFIG_NETFILTER_XT_TARGET_CONNMARK y; then
     if have iptables && [ "$(id -u)" = 0 ] &&
-       iptables -t mangle -A POSTROUTING -j CONNMARK --set-mark 1 2>/dev/null; then
-        iptables -t mangle -D POSTROUTING -j CONNMARK --set-mark 1 2>/dev/null
+       iptables -t mangle -A POSTROUTING -j CONNMARK --set-mark 1 >/dev/null 2>&1; then
+        iptables -t mangle -D POSTROUTING -j CONNMARK --set-mark 1 >/dev/null 2>&1
         row ok "Connection mark (connmark)" "rule added and removed successfully"
     else
         row ok "Connection mark (connmark)" \
@@ -396,8 +444,8 @@ if [ -n "$_dsmiss" ]; then
     row off "Droidspaces macvlan networking" "needs a --droidspaces build"
 elif cfg_is CONFIG_MACVLAN y; then
     if have ip && [ "$(id -u)" = 0 ] && [ -e /sys/class/net/wlan0 ] &&
-       ip link add gkichk_mv link wlan0 type macvlan mode bridge 2>/dev/null; then
-        ip link del gkichk_mv 2>/dev/null
+       ip link add gkichk_mv link wlan0 type macvlan mode bridge >/dev/null 2>&1; then
+        ip link del gkichk_mv >/dev/null 2>&1
         row ok "Droidspaces macvlan networking" \
             "CONFIG_MACVLAN=y; macvlan on wlan0 created and removed"
     else

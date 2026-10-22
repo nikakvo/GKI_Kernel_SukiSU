@@ -1,4 +1,5 @@
 import os
+import shutil
 import subprocess
 import logging
 import re
@@ -22,6 +23,22 @@ from config import (BuildConfig, KSU_REPO_CONFIG, SUSFS_REPO_CONFIG, SUKISU_PATC
 KPM_PATCH_REF = "547ae94bcaec53d030398f857950c64662043a5d"
 KPM_PATCH_SHA256 = "1bd00563e9d8fbbd11a16c0c1c59c5add406e6c5c92557def50f93d6f0aebe2d"
 KPM_PATCH_URL = f"https://raw.githubusercontent.com/ShirkNeko/SukiSU_patch/{KPM_PATCH_REF}/kpm/patch_linux"
+
+# Opt-in newer KernelPatch (KPM_NEXT=1, or ./build-kernel.sh --kpm-next).
+# SukiSU_patch 7c6289c ships a working kpm/kpimg (KernelPatch 0.13.9), but its
+# kpm/patch_linux was built with an empty kpimg embedded (SukiSU_patch#13: a
+# configure-time check in SukiSU_KernelPatch_patch patch/CMakeLists.txt always
+# falls back to a 1-byte placeholder). patch_linux only runs
+#   kptools -p -s 123 -i Image -k <kpimg> -o oImage
+# so with KPM_NEXT we run exactly that ourselves: kptools built from
+# SukiSU_KernelPatch_patch at a pinned commit, kpimg pinned by sha256.
+# Boot-tested on vermeer 2026-10-22 (fastboot boot, 41042 + susfs 86b5b10).
+KPM_NEXT_KPIMG_REF = "7c6289c95bdc786119b03d150236853b7b4872ca"
+KPM_NEXT_KPIMG_SHA256 = "396a20777668e85d674a23dd3945815f285332b5358be0bfc97297935e2d130b"
+KPM_NEXT_KPIMG_URL = f"https://raw.githubusercontent.com/SukiSU-Ultra/SukiSU_patch/{KPM_NEXT_KPIMG_REF}/kpm/kpimg"
+KPM_NEXT_TOOLS_REPO = "https://github.com/SukiSU-Ultra/SukiSU_KernelPatch_patch.git"
+KPM_NEXT_TOOLS_REF = "e60c6cfd5cea87cccf9adb7e4d4ba583702d443c"
+KPM_NEXT_VERSION = "d09"   # KernelPatch 0.13.9: kptools -v and the kpimg must both say this
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
@@ -5206,6 +5223,9 @@ CONFIG_CIFS_XATTR=y
         if not image_dir.exists():
             return
         self._chdir(image_dir)
+        if self._kpm_next():
+            self._patch_kpm_image_next(image_dir)
+            return
         # The patcher is pinned (KPM_PATCH_REF, top of this file) and verified by sha256
         # before it runs: it rewrites the finished Image, so an unnoticed
         # upstream change here ships a kernel that may not boot.
@@ -5237,6 +5257,96 @@ CONFIG_CIFS_XATTR=y
             )
         self._run_cmd("mv oImage Image", check=False)
         self._mark("kpm_image_patch", "applied", f"SukiSU_patch {KPM_PATCH_REF[:12]} patch_linux")
+
+    @staticmethod
+    def _kpm_next() -> bool:
+        return os.environ.get("KPM_NEXT", "").strip().lower() in ("1", "yes", "true")
+
+    def _build_kpm_next_kptools(self) -> Path:
+        """kptools (x86-64 host) from SukiSU_KernelPatch_patch at
+        KPM_NEXT_TOOLS_REF. Built once per pin and reused (workspace dir
+        named after the commit). Needs gcc + a static libz (zlib1g-dev)."""
+        src = self.workspace / f"kptools-{KPM_NEXT_TOOLS_REF[:12]}"
+        kptools = src / "tools/kptools"
+        if not kptools.exists():
+            if src.exists():
+                shutil.rmtree(src)
+            src.mkdir(parents=True)
+            r = self._run_cmd(
+                f"git -C {src} init -q && "
+                f"git -C {src} fetch -q --depth 1 {KPM_NEXT_TOOLS_REPO} {KPM_NEXT_TOOLS_REF} && "
+                f"git -C {src} checkout -q FETCH_HEAD", check=False)
+            head = self._run_cmd(f"git -C {src} rev-parse HEAD", check=False,
+                                 capture_output=True)
+            if r.returncode != 0 or (head.stdout or "").strip() != KPM_NEXT_TOOLS_REF:
+                raise RuntimeError(
+                    f"KPM_NEXT: could not fetch SukiSU_KernelPatch_patch "
+                    f"{KPM_NEXT_TOOLS_REF[:12]}. Stopping.")
+            r = self._run_cmd(f"make -C {src}/tools -j2 kptools", check=False)
+            if r.returncode != 0 or not kptools.exists():
+                raise RuntimeError(
+                    "KPM_NEXT: building kptools failed (needs gcc and zlib1g-dev "
+                    "for the static libz). Stopping.")
+        ver = self._run_cmd(f"{kptools} -v", check=False, capture_output=True)
+        out = (ver.stdout or "") + (ver.stderr or "")
+        if not re.search(rf"\b{KPM_NEXT_VERSION}\b", out):
+            raise RuntimeError(
+                f"KPM_NEXT: kptools reports '{out.strip()}', expected version "
+                f"{KPM_NEXT_VERSION}. Stopping.")
+        return kptools
+
+    def _patch_kpm_image_next(self, image_dir: Path):
+        """KPM_NEXT path of patch_kpm_image(): same result as SukiSU_patch's
+        patch_linux, done with a pinned kptools + pinned kpimg (see the
+        KPM_NEXT_* constants at the top of this file for why)."""
+        import hashlib
+        logger.info(f"KPM_NEXT: KernelPatch {KPM_NEXT_VERSION} - kpimg SukiSU_patch "
+                    f"{KPM_NEXT_KPIMG_REF[:12]}, kptools SukiSU_KernelPatch_patch "
+                    f"{KPM_NEXT_TOOLS_REF[:12]}")
+        kptools = self._build_kpm_next_kptools()
+        kpimg = image_dir / "kpimg"
+        oimage = image_dir / "oImage"
+        for f in (kpimg, oimage):
+            if f.exists():
+                f.unlink()
+        self._run_cmd(f"curl -LSsf {KPM_NEXT_KPIMG_URL} -o {kpimg}", check=False)
+        digest = hashlib.sha256(kpimg.read_bytes()).hexdigest() if kpimg.exists() else ""
+        if digest != KPM_NEXT_KPIMG_SHA256:
+            self._mark("kpm_image_patch", "failed", f"kpimg sha256 mismatch ({digest[:12] or 'download failed'})")
+            raise RuntimeError(
+                f"KPM_NEXT: kpimg (SukiSU_patch {KPM_NEXT_KPIMG_REF[:12]}) download "
+                f"failed or its sha256 doesn't match (got {digest or 'nothing'}). Stopping.")
+        image = image_dir / "Image"
+        in_size = image.stat().st_size
+        # kptools can print raw bytes on a bad Image, so go through a file
+        # instead of capture_output (text mode would crash on decoding).
+        log = image_dir / "kptools.log"
+        r = self._run_cmd(f"{kptools} -p -s 123 -i Image -k kpimg -o oImage > kptools.log 2>&1",
+                          check=False)
+        out = log.read_text(errors="replace") if log.exists() else ""
+        for line in out.splitlines():
+            logger.info(f"kptools: {line}")
+        problems = []
+        if r.returncode != 0:
+            problems.append(f"exit code {r.returncode}")
+        if not oimage.exists():
+            problems.append("no oImage")
+        elif oimage.stat().st_size <= in_size:
+            problems.append(f"oImage ({oimage.stat().st_size}) not larger than Image ({in_size})")
+        for marker in (f"kpimg version: {KPM_NEXT_VERSION}", "kpimg config: android", "patch done"):
+            if marker not in out:
+                problems.append(f"'{marker}' missing from the kptools log")
+        if problems:
+            self._mark("kpm_image_patch", "failed", "KPM_NEXT: " + "; ".join(problems))
+            raise RuntimeError(
+                "KPM_NEXT: patching the Image failed (" + "; ".join(problems) +
+                "). The kernel would not boot or would ship without KPM. Stopping.")
+        kpimg.unlink()
+        self._run_cmd("mv oImage Image", check=False)
+        logger.info(f"KPM_NEXT: Image patched with KernelPatch {KPM_NEXT_VERSION}")
+        self._mark("kpm_image_patch", "applied",
+                   f"KPM_NEXT kptools {KPM_NEXT_TOOLS_REF[:12]} + kpimg "
+                   f"{KPM_NEXT_KPIMG_REF[:12]} ({KPM_NEXT_VERSION})")
 
     def prepare_boot_images(self) -> list:
         logger.info("=== Preparing boot images ===")
