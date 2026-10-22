@@ -5564,6 +5564,9 @@ CONFIG_CIFS_XATTR=y
             self._write_patch_status()
 
             self.patch_kpm_image()
+            # Again after KPM: kpm_image_patch (which patcher, which
+            # KernelPatch version) is only known now.
+            self._write_patch_status()
             artifacts = []
             artifacts.extend(ath9k_artifacts)
             artifacts.extend(self.prepare_boot_images())
