@@ -1,646 +1,143 @@
 <p align="center"><img src="gki-kernel-v2.png" alt="GKI Kernel SukiSU"></p>
 
-# GKI SukiSU-Ultra + SUSFS Build System — Poco F6 Pro
+# GKI Kernel SukiSU-Ultra + SUSFS - Poco F6 Pro
 
-An automated build system for **GKI kernels** with **SukiSU-Ultra** and **SUSFS**, built and daily-driven on the **Poco F6 Pro / Redmi K70 (`vermeer`)**.
+A **GKI kernel** with **SukiSU-Ultra** (root) and **SUSFS** (root hiding) built in, plus networking, memory and container extras. Built, flashed and daily-driven on the **Poco F6 Pro / Redmi K70 (`vermeer`)**, and published together with the build system that makes it.
 
-Python-assisted pipeline with automatic GKI respin tracking (including LTS-merge respins, not just date-based ones), exact source pinning, AVB signing, and dependency auto-installation for local builds.
+Download the latest build from **[Releases](https://github.com/nikakvo/GKI_Kernel_SukiSU/releases)**. Each release lists its exact kernel, SukiSU-Ultra and SUSFS versions and the matching manager.
 
 ---
 
-## ⚠️ Scope — read this first
-
-This project is developed, built and tested for **one target: `android13-5.15` on the Poco F6 Pro / Redmi K70 (`vermeer`)**. That is the only configuration actually flashed and run.
+## ⚠️ Scope - read this first
 
 | Target | Status |
 |--------|--------|
-| `android13-5.15` on `vermeer` (Poco F6 Pro / K70) | **Built, flashed, tested, daily-driven.** This is the project. |
-| Other `android13-5.15` devices | Should boot (standard GKI), but **untested** — your risk. |
-| `android12-5.10`, `android14-6.1` | Tracked in the matrix, scripts attempt them, **untested**. |
-| `android15-6.6` | Builds (KMI checks pass), **untested** — one bootloop report on another device. |
-| `android16-6.12` and newer | Not attempted. |
+| `android13-5.15` on `vermeer` (Poco F6 Pro / K70), clean Xiaomi.eu HyperOS | **Built, flashed, tested, daily-driven.** This is the project. |
+| Other `android13-5.15` devices / ROMs | Standard GKI, so it may boot, but **untested** - your risk. |
+| `android12-5.10`, `android14-6.1`, `android15-6.6` | The scripts can build them, **untested** on a device. |
+| Non-GKI devices | Not supported. |
 
-- Current tested release: `android13-5.15.216` (LTS), tag `android13-5.15.216_r00`, kernel string `5.15.216-android13-r00-lts`, SukiSU-Ultra **40939** (`main` @ `cf87e3f`, UAPI 4).
-- **Does not** support OnePlus ColorOS 14/15 or non-GKI devices.
-- If you build anything other than `android13-5.15` for `vermeer`, you're on your own — **a working boot.img backup is mandatory**.
+**Always keep a working `boot.img` backup before flashing.**
 
 ---
 
-## Credits & Origin
+## Features
 
-Builds on the work of others in the GKI/KernelSU ecosystem:
+| Feature | What it gives you |
+|---------|-------------------|
+| **[SukiSU-Ultra](https://github.com/SukiSU-Ultra/SukiSU-Ultra)** | Kernel-level root (built in, not LKM), with module preinit support |
+| **[SUSFS v2.3.0](https://github.com/ShirkNeko/susfs4ksu)** | Kernel-side root hiding (paths, mounts, uname/cmdline spoofing). Needs the [userspace module](#susfs-userspace) |
+| **KPM** | Load KernelPatch modules at runtime |
+| **BBR v3** | Newer TCP congestion control (falls back to BBR v1 if the patch doesn't fit) |
+| **BIC, Westwood+, H-TCP** | Extra congestion control algorithms to switch to at runtime |
+| **CAKE qdisc** | Less bufferbloat, lower latency under load |
+| **WireGuard** | In-kernel WireGuard VPN |
+| **IP Set** | Fast IP/network sets for iptables (userspace binary: [ipset-arm64](https://github.com/nikakvo/ipset-arm64)) |
+| **TTL / Hop-Limit, CONNMARK** | Netfilter targets for hotspot TTL normalisation and policy routing |
+| **CIFS/SMB** | Mount Windows/Samba shares directly |
+| **ZRAM + LZ4KD** | Better ZRAM compression (also LZ4K, LZ4HC, deflate, 842, lz4k_oplus) |
+| **MGLRU + PSI** | Modern memory reclaim and pressure stats for smarter LMKD |
+| **Full LTO** | Release builds use Full LTO (CI builds Thin LTO) |
+| **[Droidspaces](https://github.com/ravindu644/Droidspaces-OSS)** | Real Linux containers (PID/IPC/mount/user namespaces, macvlan, pids cgroup), kABI-safe |
+| **NTSync** | `/dev/ntsync` for Wine/Winlator |
+| **[Baseband-guard](https://github.com/vc-teahouse/Baseband-guard)** | Blocks unauthorised writes to modem/baseband partitions |
+| **Ptrace leak fix, Unicode fix** | Upstream backports (ptrace race, UTF-8 normalisation bypass) |
+| **ath9k_htc** | TP-Link TL-WN722N **v1** over OTG: monitor mode + injection, internal WiFi keeps working ([details](ath9k-module/README.md)) |
 
-- **[ShirkNeko/GKI_KernelSU_SUSFS](https://github.com/ShirkNeko/GKI_KernelSU_SUSFS)** — the build system this was originally forked from; the `build.py`/`kernel_builder.py` architecture traces back to it.
-- **[SukiSU-Ultra](https://github.com/SukiSU-Ultra/SukiSU-Ultra)** — the KernelSU implementation compiled into every kernel.
-- **[susfs4ksu](https://gitlab.com/simonpunk/susfs4ksu)** and **[ShirkNeko/SukiSU_patch](https://github.com/ShirkNeko/SukiSU_patch)** — SUSFS kernel patches and supplementary SukiSU-Ultra patches (ZRAM, hooks).
-- **[WildKernels/kernel_patches](https://github.com/WildKernels/kernel_patches)** — the BBRv3 backport patches (`common/bbrv3`).
-- **[ravindu644/Droidspaces-OSS](https://github.com/ravindu644/Droidspaces-OSS)** — the container-runtime app and kABI-compliant kernel patches; [WildKernels/GKI_KernelSU_SUSFS](https://github.com/WildKernels/GKI_KernelSU_SUSFS) was the reference for wiring Droidspaces into a GKI pipeline.
+### Check what is active
 
-Since forked, this repo has diverged significantly (exact GKI respin pinning including LTS-merge tags/commits, automatic matrix updates, local-build tooling, AVB signing, ath9k_htc adapter support) and is maintained as an independent project.
+Every release ships **`check-features.sh`** (also in the repo root). It reads the kernel config and the live `/proc` and `/sys` state and prints one line per feature: `OK`, `MISSING` (please report), `NOT BUILT` (off in this build) or `N/A` (can't be checked on the device).
 
-## License
-
-This repository's own files are licensed under [GPL-3.0-or-later](LICENSE). Kernel patches, firmware and the released kernel images keep their own licenses (GPL-2.0 for anything that is part of the Linux kernel) — see [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
-
----
-
-## Features & verification
-
-Every feature below ships with the exact command to confirm it's **actually active on your device** — run each in a root shell (`adb shell` then `su`, or a terminal app like Termux). This is the single source of truth for verification; the releases just list the feature names.
-
-> Some features are **opt-in per build** (`--bbg`, `--droidspaces`, `--bbr-version bbr3`, `--extra-net`, ...) or only wired up on certain branches. If a check below comes back empty, first confirm that build actually enabled it — see the [build's patch-status summary](#build-matrix). Everything marked *(`--flag`)* below is on by default in `build-kernel.sh` and in the Actions workflows, so official releases have it.
-
-### Check everything at once
-
-Rather than running the commands below one by one, grab **`check-features.sh`** (shipped with every release, and in the repo root) and run it once.
-
-**Copy it out of `/sdcard` first.** Under `su` the root shell lives in a different mount namespace, where `/storage/emulated/0` is either invisible or mounted `noexec` — so running it straight from the Download folder fails, with or without `sh`.
-
-In Termux:
+Copy it out of `/sdcard` first - under `su` the shared storage is invisible or `noexec`. In Termux:
 
 ```bash
 cp /sdcard/Download/check-features.sh ~
-cd ~
-chmod +x check-features.sh
-su -c ./check-features.sh
+chmod +x ~/check-features.sh
+su -c "$HOME/check-features.sh"
 ```
 
-Or over adb:
-
-```bash
-adb push check-features.sh /data/local/tmp/
-adb shell
-cd /data/local/tmp && chmod +x check-features.sh
-su -c ./check-features.sh
-```
-
-It reads the kernel's own embedded config plus the live `/proc` and `/sys` state and prints one line per feature:
-
-| | |
-|---|---|
-| `OK` | present and active |
-| `MISSING` | expected but absent — worth reporting as an issue |
-| `NOT BUILT` | that flag was off for this build, so it's not a fault |
-| `N/A` | can't be verified from the device (the line says why) |
-
-Exit code is `0` unless something is `MISSING`. Add `-v` to see the measured value behind each line, or `--no-color` for plain text to paste into an issue — e.g. `su -c "./check-features.sh -v"`. Plain POSIX `sh` — no bash, no busybox extras, no Termux required (Termux is just a convenient root terminal).
-
-### Root & hiding
-
-**[SukiSU-Ultra](https://github.com/SukiSU-Ultra/SukiSU-Ultra) (KernelSU-based root)** — kernel-level root solution, compiled into every build.
-
-**[SUSFS v2.3.0](https://gitlab.com/simonpunk/susfs4ksu)** — kernel-level patches that assist root-hiding (hides suspicious paths/mount points, spoofs kernel stats/uname/cmdline, and more) together with its userspace module.
-
-**KPM (Kernel Patch Module)** — SukiSU KPM support is built in, so compatible KPM modules can be loaded at runtime.
-```bash
-su -c "cat /proc/kallsyms | grep sukisu_kpm_version"
-```
-Active if `sukisu_kpm_version` is listed.
-
-**Magic Mount** — overlay-based mounting that lets root modules modify the filesystem without touching the underlying partitions, improving compatibility and reducing detection surface.
-
-### Networking
-
-**BBR v3** — Google's improved successor to BBR v1: better fairness and less bufferbloat under load. Backported via [WildKernels' kABI-compliant patch](https://github.com/WildKernels/kernel_patches/tree/main/common/bbrv3), selected **in place of** BBR v1. Falls back to BBR v1 automatically if the patch doesn't apply on a given branch/sub_level. See [BBRv3 details](#bbrv3-details) below.
-```bash
-su -c "cat /proc/sys/net/ipv4/tcp_congestion_control"
-```
-Active if the output is `bbr3` (not `bbr`).
-
-**Additional TCP Congestion Control (BIC, Westwood+, H-TCP)** *(`--extra-net`)* — extra selectable algorithms alongside BBR/CUBIC/Reno. Doesn't change the default — just makes more available to switch to at runtime (Westwood suits lossy/wireless links).
-```bash
-su -c "cat /proc/sys/net/ipv4/tcp_available_congestion_control"
-```
-Active if `bic`, `westwood`, and `htcp` all appear (switch with `su -c "sysctl net.ipv4.tcp_congestion_control=westwood"`).
-
-**CAKE Queue Discipline** — modern qdisc (`sch_cake`) that reduces bufferbloat and improves latency under load (fair queuing + AQM + shaping in one).
-```bash
-su -c "tc qdisc add dev lo root cake && tc qdisc show dev lo && tc qdisc del dev lo root"
-```
-Active if `qdisc show` lists `qdisc cake ...`.
-
-**WireGuard** *(`--extra-net`)* — built-in kernel-level WireGuard VPN — lightweight, high-performance alternative to OpenVPN/IPsec.
-```bash
-su -c "zcat /proc/config.gz | grep CONFIG_WIREGUARD"
-```
-Active if it shows `CONFIG_WIREGUARD=y`.
-
-**IP Set (netfilter IP/network grouping)** — kernel `ipset` support: group IPs/networks/ports into named sets for O(1) hash-matched `iptables`/`ip6tables` rules and dynamic updates without reloading the ruleset. *(Needs a separate userspace `ipset` binary — see [ipset-arm64](https://github.com/nikakvo/ipset-arm64), not bundled.)*
-```bash
-su -c "ipset create test hash:ip && ipset destroy test"
-```
-Active if it runs with no "Kernel module not found" error.
-
-**TTL / Hop-Limit Target (netfilter)** — `iptables`/`ip6tables` target (`IP_NF_TARGET_TTL` / `IP6_NF_TARGET_HL`, plus `XT_TARGET_HL` with `--extra-net`) that rewrites a packet's TTL (IPv4) / Hop Limit (IPv6) — commonly used to normalize tethered/hotspot traffic so carriers can't detect it via the TTL decrement.
-```bash
-su -c "iptables -t mangle -A POSTROUTING -j TTL --ttl-set 65 && iptables -t mangle -D POSTROUTING -j TTL --ttl-set 65"
-```
-Active if both commands run with no "No chain/target/match by that name" error.
-
-**Connection Mark / connmark (netfilter)** — `XT_CONNMARK` target and match that tags whole connections (not just packets) so later packets of the same connection are handled consistently. Used for advanced firewall/QoS/policy-routing, often paired with the TTL target above.
-```bash
-su -c "iptables -t mangle -A POSTROUTING -j CONNMARK --set-mark 1 && iptables -t mangle -D POSTROUTING -j CONNMARK --set-mark 1"
-```
-Active if both commands run with no "No chain/target/match by that name" error.
-
-**CIFS/SMB Network Filesystem** *(`--extra-net`)* — kernel SMB3/CIFS client (`CONFIG_CIFS`): mount a Samba/Windows share directly (`mount -t cifs //server/share /mnt/point`) instead of via an app. The driver is always present; mounting something real needs a reachable SMB server.
-```bash
-su -c "cat /proc/filesystems | grep cifs"
-```
-Active if `cifs` is listed.
-
-### Memory & performance
-
-**ZRAM + LZ4KD** — enhanced LZ4 compression for ZRAM (sourced from Huawei's codebase): better ratios at minimal CPU cost, effectively increasing usable RAM. Other switchable algorithms: LZ4K, LZ4HC, deflate, 842, lz4k_oplus.
-```bash
-su -c "cat /sys/block/zram0/comp_algorithm"
-```
-Active if `[lz4kd]` appears in brackets.
-
-**MGLRU (Multi-Gen LRU, on by default)** — modern memory-reclaim algorithm replacing the active/inactive LRU lists with access-recency generations: more accurate reclaim, fewer background-app kills under pressure, smoother multitasking.
-```bash
-su -c "cat /sys/kernel/mm/lru_gen/enabled"
-```
-Active if the value is non-zero (e.g. `0x0003`), not `0x0000`.
-
-**PSI (Pressure Stall Information)** — real-time memory/CPU/I/O pressure metrics (`/proc/pressure/*`) so LMKD makes smarter kill decisions than coarse thresholds. Works together with MGLRU.
-```bash
-su -c "cat /proc/pressure/memory"
-```
-Active if it prints `avg10=... avg60=... avg300=... total=...` instead of an error.
-
-**Full / Thin LTO** — LLVM Link-Time Optimization. **Official releases are Full LTO** (built locally); CI/Actions builds use **Thin LTO** (Full peaks ~27 GB RAM, more than a runner has). Both perform well once installed; Full squeezes out marginally better runtime and code size.
-```bash
-su -c "zcat /proc/config.gz | grep -E 'CONFIG_LTO_CLANG_(FULL|THIN)'"
-```
-Active if it shows `CONFIG_LTO_CLANG_FULL=y` (release) or `CONFIG_LTO_CLANG_THIN=y` (CI).
-
-### Containers & compatibility
-
-**Droidspaces** — real Linux namespace isolation (PID/IPC/Mount/User) at the kernel level: run a full Linux distro in a genuine container with its own init system (systemd, OpenRC), not just a chroot. Managed via the [Droidspaces app](https://github.com/ravindu644/Droidspaces-OSS). See [Droidspaces details](#droidspaces-details) below.
-```bash
-su -c "zcat /proc/config.gz | grep -E 'CONFIG_SYSVIPC|CONFIG_POSIX_MQUEUE|CONFIG_IPC_NS|CONFIG_PID_NS|CONFIG_USER_NS|CONFIG_DEVTMPFS'"
-```
-Active if all show `=y`. Deeper functional check:
-```bash
-su -c "unshare -pf echo namespace-test-ok"
-```
-Active if it prints `namespace-test-ok` without an error.
-
-**Droidspaces macvlan networking** (`--net=macvlan`, since v40993) - built together with Droidspaces:
-```bash
-su -c "zcat /proc/config.gz | grep CONFIG_MACVLAN"
-su -c "/system/bin/ip link add mvtest link wlan0 type macvlan mode bridge && /system/bin/ip -d link show mvtest && /system/bin/ip link del mvtest"
-```
-Active if it shows `CONFIG_MACVLAN=y` and the second command prints `mvtest` with `macvlan mode bridge` and no error. CPU limits (`--cpus`) are left out on purpose: `CONFIG_CFS_BANDWIDTH` changes `struct rq` in the GKI KMI and would break vendor scheduler modules. A plain `CONFIG_CGROUP_PIDS` (`--pids-limit`) would also break the KMI; the experimental opt-in `--droidspaces-pids` (android13-5.15 only, off in releases) instead gives pids the cgroup id of the unused v1 controller net_prio, so struct layouts and symbol CRCs stay stock. Check it with `su -c "cat /sys/fs/cgroup/cgroup.controllers"` - `pids` must be listed.
-
-**NTSync (Winlator/Wine)** — kernel driver (`/dev/ntsync`) emulating Windows NT sync primitives (semaphores/mutexes/events) natively instead of over futex: better compatibility and lower overhead for Wine-based layers like Winlator. Only on branches with a compatible backport.
-```bash
-su -c "ls -la /dev/ntsync"
-su -c "zcat /proc/config.gz | grep CONFIG_NTSYNC"
-```
-Active if `/dev/ntsync` exists (character device) and `CONFIG_NTSYNC=y` is shown.
-
-### Security
-
-**BBG (Baseband-guard)** *(`--bbg`)* — lightweight LSM ([vc-teahouse/Baseband-guard](https://github.com/vc-teahouse/Baseband-guard)) hooking the kernel write path to block unauthorized writes to the baseband/modem and other protected partitions, denying by default and logging every blocked attempt. Boot/recovery-partition protection is deliberately left off (it's caused conflicts with kernel-zip flashing elsewhere) — only core baseband protection is on.
-```bash
-su -c "zcat /proc/config.gz | grep CONFIG_BBG"
-su -c "dmesg | grep -c baseband_guard"
-```
-Active if `CONFIG_BBG=y` is shown and the dmesg count is non-zero.
-
-**Ptrace Leak Fix (kernels < 5.16)** — backports the upstream 5.16 hardening fix that closes a `ptrace_message` race (a child's PID briefly visible to other readers before the tracer is notified, or stale after detach). Applied on 5.10/5.15; already upstream on 6.1+. No `/proc` flag to check — it's an internal timing fix, not a toggle.
-
-**Unicode Fix** — backports a fix to the kernel's UTF-8 normalization subsystem (`fs/unicode/utf8-norm.c`, used by case-insensitive f2fs/ext4 folders). The upstream bug advanced the decode cursor *before* checking whether a decomposition was empty (e.g. a zero-width character), so a crafted filename could make case-insensitive path comparisons behave inconsistently — including the path checks used for root-hiding, hence the "bypass". A plain upstream-kernel fix (not KSU/SUSFS-specific). No `/proc` flag to check — it's an internal correctness fix, not a toggle.
-
-### External hardware
-
-**ath9k_htc — external WiFi adapter (`--ath9k`)** — TP-Link TL-WN722N v1 (Atheros AR9271) over OTG: **monitor mode + packet injection** for WiFi security testing on **your own networks** (Kali/NetHunter-style, on the phone), with built-in WiFi still fully working. Ships as a flashable module. See [ath9k_htc details](#ath9khtc-details) below.
-```bash
-su -c "zcat /proc/config.gz | grep CONFIG_ATH9K_HTC"
-```
-Active if it shows `CONFIG_ATH9K_HTC=m`. Full end-to-end check (adapter plugged in, module flashed): `iw dev` lists a `wlan1` interface.
-
----
-
-## Quick Start
-
-### Local build (recommended)
-
-Handles dependency installation automatically — no manual setup, even on a clean Ubuntu/WSL install.
-
-```bash
-git clone https://github.com/nikakvo/GKI_Kernel_SukiSU
-cd GKI_Kernel_SukiSU
-chmod +x build-kernel.sh cleanup-workspace.sh
-./build-kernel.sh
-```
-
-With no flags it builds **the exact SukiSU-Ultra / SUSFS combination the latest release was built from** — the known-good pins live in [`config.py`](#known-good-pins-configpy), so a fresh clone or fork needs nothing extra. To see whether upstream has something newer, run [`./check-release.sh`](#checking-for-updates-check-releasesh): it prints the exact command to build it.
-
-You'll get a menu:
-```
-1) Default (android13 / 5.15 / 216 / 2026-09)   ← the tested config for vermeer
-2) Custom (choose your own versions)             ← anything non-android13-5.15 is untested
-3) All versions from matrix.json                 ← every "enabled": true entry, with a pass/fail summary
-```
-
-Reclaim disk space between builds (keeps shared repos and the AVB key intact):
-```bash
-./cleanup-workspace.sh
-```
-
-### GitHub Actions
-
-> **CI builds Thin LTO, not Full.** Full LTO peaks ~27 GB RAM, more than a runner has. Actions builds are usable but are **not** the tested release binaries — official releases are Full-LTO, built locally and flashed on-device first.
-
-- **Kernel Build** workflow → build a single version (pick Android/kernel/options).
-- **Build Kernels** workflow → build every enabled matrix entry.
-
-Leave the **SukiSU / version code / SUSFS** inputs **empty** and the workflows use the same known-good pins from `config.py` as a local build — that's the right choice for a fork. Fill them in only to try something else (`main` for SukiSU's moving branch, `latest` for every susfs branch HEAD).
-
-### Command-line (manual)
-
-```bash
-cd .github/workflows/scripts
-pip install PyYAML
-
-# Build the tested default (android13-5.15.216, vermeer)
-python3 build.py --android android13 --kernel 5.15 --sub-level 216 --os-patch 2026-09 --kernel-tag android13-5.15.216_r00 --ath9k
-
-# List supported Android/Kernel combinations
-python3 build.py --list-configs
-```
-
----
-
-## Exact Source Pinning (`--kernel-tag`)
-
-Google's GKI branches (e.g. `android13-5.15-2025-12`) are **moving branches**, not fixed points — Google periodically pushes new commits and tags each snapshot as a numbered respin (`_r1`, `_r2`, …). Building without pinning grabs whatever the branch HEAD happens to be at sync time, which is **not reproducible** and may be several respins behind the latest security fixes.
-
-`--kernel-tag` checks out an **exact** respin instead. It accepts:
-
-**A date-based respin tag** (classic scheme):
-```bash
-python3 build.py --android android13 --kernel 5.15 --sub-level 194 --os-patch 2025-12 \
-    --kernel-tag android13-5.15-2025-12_r10
-```
-
-**A per-sublevel LTS-merge tag** (see [LTS Builds](#lts-builds)):
-```bash
-python3 build.py --android android13 --kernel 5.15 --sub-level 216 --os-patch 2026-09 \
-    --kernel-tag android13-5.15.216_r00
-```
-
-**A raw commit SHA** (7–40 hex chars) — when an LTS-merge has landed on Google's `android*-lts` branch but no `_r00` tag is cut yet:
-```bash
-python3 build.py --android android13 --kernel 5.15 --sub-level 216 --os-patch 2026-09 \
-    --kernel-tag 013ca9e40fcad3368249133b0fb4e00762b40625
-```
-
-Find the latest respin/tag for your branch at:
-- https://android.googlesource.com/kernel/common/+refs (all tags/branches)
-- https://android.googlesource.com/kernel/common/+log/refs/heads/android13-5.15-lts (live LTS log — look for "Merge 5.15.XXX into androidYY-Z.ZZ-lts")
-- https://source.android.com/docs/core/architecture/kernel/gki-android13-5_15-release-builds (official release notes, date-based only)
-
-**If the tag/SHA doesn't exist upstream, the build fails immediately** rather than silently falling back to the moving HEAD — a build that quietly compiles a *different* real sub_level while every filename still claims the one you asked for is far worse than one that refuses to start. The resulting kernel string reflects the pinned respin (e.g. `5.15.216-android13-r00-lts`).
-
----
-
-## LTS Builds
-
-Google keeps a GKI branch current two ways:
-
-1. **Date-based respins** (`android13-5.15-2026-06_r4`) — periodic official snapshots per security patch level; the classic, fully-certified process.
-2. **LTS merges** (`android13-5.15.216_r00`) — once the date-based cadence winds down, Google periodically merges the upstream Linux `5.15.y` **-stable** tree straight into a sibling `android13-5.15-lts` branch and tags the result. Trades full GKI certification for staying current with upstream kernel security fixes.
-
-Both are real, buildable, and built identically here — LTS is just a different tag naming scheme, not a separate build mode. Any LTS-sourced build (dot-style tag or raw SHA) gets a `-lts` marker appended so it's obvious downstream:
-
-- **Filename:** `android13-5.15.216-2026-09-lto-full-r00-lts-boot.img` (vs. `android13-5.15.206-2026-06-r4-boot.img`)
-- **On-device kernel version:** `5.15.216-android13-r00-lts` (vs. `5.15.206-android13-r4`)
-- SHA-pinned (no tag yet): respin number omitted — `5.15.216-android13-lts`
-
-This is detected automatically from the tag format (a dot before the sub_level, or a bare SHA) — you never flag a build as LTS by hand. `matrix.json` marks these `"lts": true` purely for the CI summary; it has no effect on the build.
-
----
-
-## Pinning SukiSU-Ultra / SUSFS (`--ksu-commit`, `--susfs-commit`)
-
-Both SukiSU-Ultra and susfs4ksu are **fast-moving upstream projects**, and the newest commit doesn't always build (an API change lands before the patches catch up, a hook breaks). So builds are **pinned by default** to a known-good combination, and moving it is a deliberate step.
-
-<a id="known-good-pins-configpy"></a>
-### Known-good pins (`config.py`)
-
-The single source of truth is the top of `.github/workflows/scripts/config.py`:
-
-```python
-DEFAULT_KSU_REF = "cf87e3f4ddd3f6e5464d85acf56aaa6950e70841"
-DEFAULT_KSU_VERSION_CODE = 40939
-DEFAULT_SUSFS_PINS = {
-    "gki-android13-5.15": "e565931d19256fd821ada01b35263506e7c7a364",
-    "gki-android14-6.1": "273ae364c5b7c92ceb15634c9f075b6fc0501048",
-    "gki-android15-6.6": "9d9464f191b2d846590ac4d1b52e123df135c401",
-}
-```
-
-Every entry point uses these when not told otherwise — `./build-kernel.sh`, `build.py`, and both Actions workflows with their pin inputs empty — and the build log prints which pins it used. `check-release.sh` updates them for you once a new build is confirmed working. `android13-5.15` is built, flashed and daily-driven; the 6.1 / 6.6 pins are verified to patch but not device-tested. Branches without an entry build from their susfs branch HEAD.
-
-The equivalent explicit command (this is what `check-release.sh` prints):
-
-```bash
-./build-kernel.sh --ksu-commit cf87e3f4ddd3f6e5464d85acf56aaa6950e70841 \
-  --susfs-commit e565931d19256fd821ada01b35263506e7c7a364 \
-  --ksu-version-code 40939
-```
-
-### Overriding the pins
-
-- **`--ksu-commit <ref>`** — SukiSU-Ultra tag, branch or commit. `main` tracks the moving branch. Releases are currently built from SukiSU-Ultra **`main`** (pinned by SHA), because main carries **UAPI 4** and no tag does yet — the current manager needs UAPI 4.
-- **`--susfs-commit <ref>`** — susfs4ksu commit, `HEAD~N`, a per-branch map (below), or `latest` for every branch HEAD.
-- **`--ksu-version-code <n>`** — the version number the kernel reports. Without a pin, SukiSU's Kbuild asks GitHub for main's live commit count at build time, so the same source reports a different number on different days. The manager checks the number, so it must match the manager you install (it's shown in the app, e.g. `40939-4` — the part after the dash is the UAPI version). `DEFAULT_KSU_VERSION_CODE` is applied automatically **only** when building `DEFAULT_KSU_REF`; with any other `--ksu-commit`, pass this yourself.
-
-> **Kernel and manager must match.** A kernel built from `main` @ `cf87e3f` reports **40939 / UAPI 4** and pairs with the SukiSU-Ultra manager **40939** from SukiSU's CI. The older manager released for tag `v4.2.0` expects UAPI 2 and will report a mismatch.
-
-> **`--susfs-commit` is per-branch.** susfs4ksu keeps a **separate branch per GKI version**, each carrying only its own `50_add_susfs_in_gki-<android>-<kernel>.patch`. So a hash is valid for **exactly one** GKI branch — the build refuses a mismatched pin. `e565931…` is the `gki-android13-5.15` one; `gki-android14-6.1` and `gki-android15-6.6` each have their own (`check-release.sh --branch …` prints them).
->
-> To pin different commits per branch in one command, use the `branch=hash` form:
-> ```bash
-> ./build-kernel.sh --ksu-commit cf87e3f4ddd3f6e5464d85acf56aaa6950e70841 \
->     --susfs-commit 'gki-android13-5.15=e565931d19256fd821ada01b35263506e7c7a364,gki-android15-6.6=9d9464f191b2d846590ac4d1b52e123df135c401'
-> ```
-
-Pin the two **together** — SUSFS's integration patch targets a specific SukiSU-Ultra source layout, so mixing a pinned SUSFS with a moving SukiSU (or vice versa) can drift out of sync. On current SukiSU `main`, three hunks of that patch miss `kernel/core/init.c`; the build finishes that file's migration itself (`_recover_susfs_init_c` in `kernel_builder.py`) and records it in `PATCH_STATUS.json` as `manual kernel/core/init.c fixup`. That's expected — failures in **any other** file stop the build.
-
-### Checking for updates (`check-release.sh`)
-
-Run from the repo root, no build involved:
-
-```bash
-./check-release.sh                              # android13-5.15 (default)
-./check-release.sh --branch gki-android15-6.6   # other branches
-```
-
-It picks the newest SukiSU-Ultra worth building (a UAPI 4 tag if one exists, otherwise `main`), computes its version code the same way the kernel and manager do, finds the newest susfs commit for the branch, then **applies the SUSFS integration patch for real** in a throwaway tree and runs the pipeline's own recovery code on it. The verdict comes from the same code the build runs, not from counting hunks.
-
-- **`OK … Build this:`** — something new, and it patches cleanly. Copy the printed `./build-kernel.sh` command.
-- **`OK … You're up to date`** — nothing new since the last build; the rebuild command is printed anyway (useful for a new kernel sub_level).
-- **`STOP`** — upstream changed something the recovery doesn't know about. Don't build that combination; the last working command is printed instead.
-
-When it suggests a build, it remembers exactly that combination. **Run it again after you've built, flashed and tested**, and it asks:
-
-```
-  Did you build, flash and test it?
-    1) Yes, it works  - save it as the new known-good build
-    2) Not yet        - ask me again next time
-    3) It's broken    - never suggest this combination again
-```
-
-`1` writes the new pins into `config.py` (then upload that file — it also moves the defaults for CI and forks). `3` blacklists the combination until upstream moves on. `--no-ask` skips the question.
-
----
-
-## Build Matrix
-
-`matrix.json` (`.github/workflows/config/matrix.json`) is the single source of truth for which `sub_level`/`os_patch_level`/`kernel_tag` combinations exist. It is **not maintained by hand**:
-
-```bash
-cd .github/workflows/scripts
-python3 update_matrix.py --dry-run   # preview
-python3 update_matrix.py             # apply
-```
-
-This queries Google's `kernel/common` repo directly (`git ls-remote --tags`) and tracks **both** tag schemes independently so a date-based respin and an LTS-merge respin never collide:
-
-- **Date-based tags** — latest respin per month, real `sub_level` resolved from each tag's `Makefile`, keyed by `os_patch_level`.
-- **LTS-merge tags** — `sub_level` read straight from the tag (no `Makefile` fetch), keyed by `sub_level`, capped to the 15 highest per family (these tags carry no date to bound the lookback).
-
-New entries are added `"enabled": false` (opt-in); existing entries get their `kernel_tag`/`sub_level` refreshed without touching your `enabled` choices. A SHA-pinned entry is auto-upgraded to the real tag once Google cuts it.
-
-Tracked families: `android12-5.10`, `android13-5.15`, `android14-6.1`, `android15-6.6`, `android16-6.12`, `android17-6.18`. **Only `android13-5.15` is tested.**
-
-```json
-{"sub_level": "216", "os_patch_level": "2026-09", "kernel_tag": "android13-5.15.216_r00", "lts": true, "enabled": true}
-```
-
----
-
-## Command-Line Arguments
-
-| Argument | Description | Default |
-|------|------|--------|
-| `--android`, `-a` | Android version (android12–android17) | android14 |
-| `--kernel`, `-k` | Kernel version (5.10/5.15/6.1/6.6/6.12/6.18) | 6.1 |
-| `--sub-level`, `-s` | Sub level (e.g. `194`, `211`) | 124 |
-| `--os-patch` | OS Patch Level | 2025-02 |
-| `--kernel-tag` | Pin an exact GKI respin — date-based tag, LTS-merge tag, or raw commit SHA (see [Exact Source Pinning](#exact-source-pinning---kernel-tag)) | - |
-| `--lts` | Mark build as LTS-sourced. Rarely needed — auto-detected from `--kernel-tag` | auto |
-| `--ath9k` | Build ath9k_htc + ath9k_common + ath9k_hw + ath as out-of-tree modules for a TL-WN722N v1 (see [ath9k_htc details](#ath9khtc-details)) | False |
-| `--revision` | Android 12 revision (certified-boot reference downloads) | - |
-| `--ksu-version` | Label only (Stable/Dev, shown in Telegram notifications) — does not select a source | Stable |
-| `--ksu-commit` | SukiSU-Ultra commit/tag/branch (`main` = moving branch) | `DEFAULT_KSU_REF` |
-| `--ksu-version-code` | Version number SukiSU reports (must match the manager) | `DEFAULT_KSU_VERSION_CODE` with the default ref, else live count |
-| `--susfs-commit` | SUSFS commit, `HEAD~N`, `branch=hash,...`, or `latest` | `DEFAULT_SUSFS_PINS` |
-| `--zram` | Enable ZRAM (LZ4KD) | False |
-| `--no-kpm` | Disable KPM | False |
-| `--bbg` | Enable Baseband-guard | False |
-| `--droidspaces` | Enable Droidspaces (android12/13/14 only) | False |
-| `--droidspaces-pids` | EXPERIMENTAL: `CONFIG_CGROUP_PIDS` for Droidspaces `--pids-limit` via the net_prio cgroup slot swap (android13-5.15 only, needs `--droidspaces`) | False |
-| `--op8e` | Enable OnePlus 8E support | False |
-| `--bbr-version` | Congestion control: `none`, `bbr1`, or `bbr3` (bbr3 android12/13/14 only) | bbr1 |
-| `--no-release` | Don't create a GitHub Release | False |
-| `--custom-version` | Custom `CONFIG_LOCALVERSION` string | - |
-| `--list-configs` | List supported Android/Kernel combinations | - |
-| `--dry-run` | Validate the configuration only, don't build | - |
-| `--workspace`, `-w` | Working directory | /tmp/gki-build |
-
----
-
-## Downloads
-
-Each release attaches:
-
-1. **boot.img** — the ready-made boot image (`android13-5.15.216-2026-09-lto-full-r00-lts-boot.img`). Flash over `fastboot`. AVB-signed (see [AVB Signing](#avb-signing)).
-2. **AnyKernel3.zip** — the same kernel packaged for flashing from recovery or a kernel-flasher app, without a PC.
-3. **ath9k_htc_vermeer.zip** — companion module for the ath9k adapter. Only needed with a TL-WN722N v1.
-
-Pick **one** of boot.img or AnyKernel3 — they install the same kernel two different ways.
+Add `-v` to see the measured values, or `--no-color` for text to paste into an issue.
 
 ---
 
 ## Installation
 
-> **This is a SukiSU-Ultra kernel.** Root is managed by the **[SukiSU-Ultra](https://github.com/SukiSU-Ultra/SukiSU-Ultra) manager app** — install it (or update to it) so you get a root manager after flashing. See the [SUSFS notes](#susfs-userspace) at the end.
->
-> **Use the manager version named in the release notes** (currently **40939**, from SukiSU's [CI builds](https://github.com/SukiSU-Ultra/SukiSU-Ultra/actions/workflows/build-manager.yml)). Kernel and manager must report the same number — a mismatched manager shows a version / "kernel needs updating" warning.
->
-> **Always keep your current, working `boot.img` backed up before flashing anything.** If a flash goes wrong, see [Emergency Recovery](#emergency-recovery).
-
-### Method 1 — boot.img via fastboot (PC)
-
-Reboot to the bootloader (`adb reboot bootloader`, or Power + Volume Down), then pick one:
-
-**Permanent, both slots** (recommended for daily use):
-```bash
-fastboot flash boot_ab android13-5.15.216-2026-09-lto-full-r00-lts-boot.img
-```
-
-**Try it first, without writing anything** (loads the image once into RAM; a normal reboot goes back to your existing kernel):
-```bash
-fastboot boot android13-5.15.216-2026-09-lto-full-r00-lts-boot.img
-```
-
-> **Tip:** instead of typing the long filename, type `fastboot flash boot_ab ` (with the trailing space) and **drag-and-drop the `.img` file** into the terminal — it fills in the full path for you.
->
-> **`fastboot boot` vs `fastboot flash`:** `fastboot boot` (no `flash`) is truly temporary — nothing is written, so a normal reboot goes back to your old kernel. Use it to test before committing. `fastboot flash boot_ab` actually writes the kernel to both slots. If `fastboot boot` just hangs on this device, flash with `flash boot_ab` instead (keep your backup boot.img handy either way).
-
-### Method 2 — AnyKernel3 (no PC)
-
-Flash `AnyKernel3.zip` like any other flashable zip:
-
-- **Custom recovery** (TWRP/OrangeFox) — *Install* → pick the zip → swipe.
-- **[HorizonKernelFlasher](https://github.com/libxzr/HorizonKernelFlasher/releases)** or another kernel-flasher app — open the app, select the zip, flash.
-- **SukiSU-Ultra manager** — if your current manager supports flashing AnyKernel zips, you can install it from there directly.
-
-Reboot when done.
-
-### After flashing
-
-1. Open the **SukiSU-Ultra manager** — it should show **Working**, **Built-in**, and the same version for kernel and manager (e.g. `40939-4`).
-2. Confirm the kernel string is `5.15.216-android13-r00-lts` (shown in the manager, or `su -c uname -r`).
-3. Verify any features you care about with the commands in [Features & verification](#features--verification).
+1. Back up your current `boot.img`.
+2. Flash **one** of the two:
+   - **boot.img** over fastboot (from the bootloader, `adb reboot bootloader`):
+     ```bash
+     fastboot boot <boot.img>          # try it once, nothing is written
+     fastboot flash boot_ab <boot.img> # install on both slots
+     ```
+   - **AnyKernel3 zip** from a custom recovery or a kernel flasher app such as [HorizonKernelFlasher](https://github.com/libxzr/HorizonKernelFlasher/releases).
+3. Install the **SukiSU-Ultra manager named in the release notes**. Kernel and manager must report the same version number, otherwise the manager shows a mismatch. The official tagged manager APK usually does **not** match - use the one linked in the release.
+4. Open the manager: it should show **Working** and **Built-in**.
 
 <a id="susfs-userspace"></a>
-### SUSFS (userspace)
+### SUSFS userspace module
 
-The **kernel side** of SUSFS is already baked into this build (patched in from [`ShirkNeko/susfs4ksu`](https://github.com/ShirkNeko/susfs4ksu), per GKI branch) — you don't install anything for that part.
+The kernel side of SUSFS is already built in, but nothing gets hidden without the userspace module. Flash **[sidex15/susfs4ksu-module](https://github.com/sidex15/susfs4ksu-module)** in the manager (the tested build is attached to every release), reboot, and configure it there.
 
-For **full SUSFS support** you also need the **userspace module**, which actually drives the hiding (mount cleanup, path spoofing, etc.). Flash [**sidex15/susfs4ksu-module**](https://github.com/sidex15/susfs4ksu-module) in the SukiSU-Ultra manager like any other root module:
+### Emergency recovery
 
-- **Release build:** grab the latest zip from the module's [Releases](https://github.com/sidex15/susfs4ksu-module/releases).
-- **Latest build:** or the freshest artifact from its [Actions](https://github.com/sidex15/susfs4ksu-module/actions).
+If the phone does not boot: hold **Power + Volume Down** for fastboot and flash your backup:
 
-Flash it, reboot, and configure the hiding from the SUSFS module / manager.
-
----
-
-## ath9k_htc details
-
-Adds support for a **TP-Link TL-WN722N v1** (Atheros AR9271) USB adapter over OTG — monitor mode and packet injection — while the phone's built-in WiFi stays fully working. For WiFi security testing on **your own networks** (Kali/NetHunter-style workflows, on the phone instead of a laptop). Enable with `--ath9k` (on by default in `build-kernel.sh`).
-
-### How it works (and why not the obvious way)
-
-GKI ships **no** wireless stack — `gki_defconfig` defines neither `CONFIG_CFG80211` nor `CONFIG_MAC80211`; the real stack is Qualcomm's, loaded as vendor modules from `/vendor/lib/modules`. The naive fix (`CFG80211=y`/`MAC80211=y`) builds a second copy of that symbol surface into the image, which stops the vendor's `qca_cld3`/`kiwi_v2` from loading and **kills internal WiFi**.
-
-Instead, `--ath9k` builds `ath9k_htc` + `ath9k_common` + `ath9k_hw` + `ath` as **out-of-tree modules** (`=m`, never `=y`) linked against the vendor stack. The GKI image's wireless config is left untouched, so internal WiFi is never disturbed. The built `cfg80211.ko`/`mac80211.ko` are deliberately **not** packaged — the device uses Qualcomm's. Post-build, the modules' exported-symbol CRCs are verified against the device's actual vendor `cfg80211`/`mac80211` before release, so a module that couldn't load never ships.
-
-### Using it
-
-The kernel alone isn't enough — the driver needs firmware and needs loading at boot. That's the separate flashable module **`ath9k_htc_vermeer.zip`** (attached to each release; source in [`ath9k-module/`](ath9k-module/)):
-
-1. Flash the kernel (built with `--ath9k`).
-2. Install `ath9k_htc_vermeer.zip` in your root manager.
-3. Reboot, plug the antenna in over OTG.
-
-See [`ath9k-module/README.md`](ath9k-module/README.md) for details, including why **the antenna LED won't light** (intentional — the vendor `mac80211` doesn't export the LED-trigger symbols, and forcing them would stop the driver loading; everything else works).
-
-> **Adapter must be v1.** The TL-WN722N v2 and v3 are a Realtek chip and will **not** work with this driver.
-
----
-
-## BBRv3 details
-
-[BBRv3](https://github.com/WildKernels/kernel_patches/tree/main/common/bbrv3) is Google's newer TCP congestion control — an evolution of the widely-used BBRv1. Backport patches are vendored from WildKernels, pre-adjusted for Android kABI compliance. Enable with `--bbr-version bbr3` (or the `BBR congestion control version` choice in either Actions workflow, or `BBR_VERSION="bbr3"` in `build-kernel.sh`).
-
-**Wired up for `android12-5.10`, `android13-5.15`, `android14-6.1` only** — though only `android13-5.15` is tested. (WildKernels also publish an `android15-6.6` variant; not vendored since nothing currently built targets that branch.)
-
-Two small prerequisite patches (`proc_dou8vec_minmax()` and a follow-up data-race fix, both from mainline `-stable`) are applied first if missing — on the sub_levels built here they're almost certainly already present, so this is a silent no-op in practice.
-
-If the main BBRv3 patch doesn't apply cleanly (a branch's `net/ipv4` source has diverged too far), the build **falls back to BBRv1** as the default rather than silently leaving cubic — check the [patch status summary](#build-matrix) (a `FAIL` on `BBRv3` means this happened).
-
----
-
-## Droidspaces details
-
-[Droidspaces](https://github.com/ravindu644/Droidspaces-OSS) is a lightweight, LXC-like container runtime for Android — real Linux namespace isolation (PID, IPC, Mount) so a full Linux distro can run with its own genuine init system (systemd, OpenRC), instead of a plain chroot that just shares the host's process tree. Enable with `--droidspaces` (or the `Enable Droidspaces` toggle in either Actions workflow, or `DROIDSPACES="1"` in `build-kernel.sh`).
-
-**Wired up for `android12-5.10`, `android13-5.15`, `android14-6.1`** — though only `android13-5.15` is tested. GKI enforces a strict kABI checksum on struct layouts, so naively enabling `CONFIG_SYSVIPC`/`CONFIG_IPC_NS`/`CONFIG_POSIX_MQUEUE` without a matching patch causes an **immediate bootloop**. This flag applies the upstream kABI-safe patch (moving the relevant fields into Android's reserved padding slots) *before* turning those options on — three slot-layout variants are vendored and tried in order (strict, no-fuzz matching), since which `ANDROID_KABI_RESERVE` slots are free isn't identical across every respin; whichever one fits this exact source tree is used. If none fit, the build continues **without** Droidspaces rather than risking a silent kABI break (a `FAIL` on `Droidspaces` in the [patch status summary](#build-matrix) means this happened).
-
-Applied *after* SUSFS/SukiSU-Ultra in the build sequence deliberately — if there's ever a conflict over the same kABI reserve slots, it's this optional feature that loses, never the project's core functionality.
-
-Verify and use it via the [Droidspaces app](https://github.com/ravindu644/Droidspaces-OSS) (Settings → Requirements → Check Requirements).
-
----
-
-## AVB Signing
-
-Every `boot.img` is signed with `avbtool` using a canonical RSA key so images are consistently signed across local and CI builds:
-
-- **Locally:** if no key is found, one is auto-generated once at `<workspace>/boot_sign_key.pem` and reused for every subsequent build.
-- **CI:** set the same key content as the `BOOT_SIGN_KEY` repository secret.
-
-For most users on an unlocked bootloader this is a formality (AVB verification is typically bypassed).
-
----
-
-## Emergency Recovery
-
-> Use this if the device fails to boot after a bad or incompatible kernel flash.
-
-1. Enter Fastboot mode — hold **Power + Volume Down**, or run `adb reboot bootloader`.
-2. Flash a known-good boot image:
-   ```bash
-   fastboot flash boot_ab <full_boot.img_filename>
-   ```
-
----
-
-## Build System Architecture
-
-```
-.github/workflows/
-├── config/
-│   ├── matrix.json           # Build matrix — kept current by update_matrix.py
-│   └── update_matrix.py      # Refreshes matrix.json from Google's kernel/common tags
-├── scripts/
-│   ├── build.py               # Main build script (CLI entry point)
-│   ├── kernel_builder.py      # Core kernel build class
-│   ├── config.py              # Configuration + the known-good SukiSU/SUSFS pins (DEFAULT_*)
-│   ├── matrix_generator.py    # GitHub Actions matrix generator
-│   ├── patch_summary.py       # Aggregates per-build patch status into one CI summary table
-│   ├── release_generator.py   # Release notes generator (feature list only)
-│   ├── extract_artifacts.py   # Collects build artifacts for release
-│   ├── telegram_notify.py     # Optional Telegram build notifications
-│   ├── ath9k/                 # ath9k module fragment, CRC table, symbol verifier
-│   ├── firmware/ath9k_htc/    # htc_9271-1.4.0.fw
-│   └── patches/               # kernel patches (bbrv3, ntsync, droidspaces, ath9k LEDS, ...)
-├── update-matrix.yml          # Scheduled workflow that runs update_matrix.py
-├── kernel-build.yml           # Single-version build workflow
-└── build-kernels.yml          # Full matrix build workflow
-
-ath9k-module/                  # Source of the ath9k_htc_vermeer.zip flashable module
-build-kernel.sh                # Local interactive build menu (recommended entry point)
-check-release.sh               # Checks upstream SukiSU/susfs, prints the build command, saves new pins to config.py
-cleanup-workspace.sh           # Reclaims disk space between builds
+```bash
+fastboot flash boot_ab <your-backup-boot.img>
 ```
 
-### Core Components
+---
 
-| Component | Function |
-|------|------|
-| `KernelBuilder` | Core build class — clones source, applies patches, compiles, packages |
-| `BuildConfig` | Build configuration data class holding all build parameters |
-| `update_matrix.py` | Queries Google's kernel/common tags and keeps matrix.json current |
-| `matrix_generator.py` | Generates the build matrix for the Actions matrix build |
-| `patch_summary.py` | Aggregates per-build patch status into one CI summary table |
-| `release_generator.py` | Generates the release feature list |
+## Building it yourself
 
-### Repository Dependencies
+Local build in Ubuntu / WSL. Dependencies are installed automatically.
 
-| Repository | Purpose |
-|------|------|
-| [SukiSU-Ultra](https://github.com/SukiSU-Ultra/SukiSU-Ultra) | SukiSU-Ultra source and setup script |
-| [susfs4ksu](https://gitlab.com/simonpunk/susfs4ksu) | SUSFS kernel patches |
-| [SukiSU_patch](https://github.com/ShirkNeko/SukiSU_patch) | Additional SukiSU-Ultra patches (ZRAM, hooks) |
-| [AnyKernel3](https://github.com/WildPlusKernel/AnyKernel3) | Generic flashable package template |
-| [Baseband-guard](https://github.com/vc-teahouse/Baseband-guard) | Baseband security protection |
+```bash
+git clone https://github.com/nikakvo/GKI_Kernel_SukiSU
+cd GKI_Kernel_SukiSU
+./build-kernel.sh            # menu: 1) tested default, 2) custom, 3) all from matrix.json
+./cleanup-workspace.sh       # free disk space between builds
+```
+
+With no flags it builds **exactly the SukiSU-Ultra / SUSFS combination of the latest release**. The pins live at the top of `.github/workflows/scripts/config.py`.
+
+Useful `build-kernel.sh` options:
+
+| Option | Meaning |
+|--------|---------|
+| `--pids` | Add `CONFIG_CGROUP_PIDS` for Droidspaces (android13-5.15, used in releases) |
+| `--ksu-commit <ref>` | Other SukiSU-Ultra commit / tag / `main` |
+| `--ksu-version-code <n>` | Version number the kernel reports - must match your manager |
+| `--susfs-commit <ref>` | Other susfs commit, `branch=hash,...`, or `latest` |
+| `--no-ath9k` | Skip the ath9k_htc modules |
+
+### Checking for updates: `check-release.sh`
+
+SukiSU-Ultra and SUSFS move fast, and the newest commits don't always fit together. `check-release.sh` finds the newest SukiSU-Ultra and susfs commits, applies the SUSFS patch in a throwaway tree with the same recovery code the build uses, and prints the exact build command:
+
+- **OK ... Build this** - new combination, patches cleanly.
+- **OK ... You're up to date** - nothing new.
+- **STOP** - upstream changed something the pipeline doesn't handle yet; the last working command is printed instead.
+
+After you build, flash and test, run it again and answer `1` to save the new pins in `config.py` (or `3` to blacklist a broken combination).
+
+### GitHub Actions
+
+The **Kernel Build** (one version) and **Build Kernels** (whole matrix) workflows use the same pins when their inputs are left empty. CI builds **Thin LTO** (Full LTO needs ~27 GB RAM), so they are not the tested release binaries.
+
+Kernel versions and Google tags come from `.github/workflows/config/matrix.json`, kept current by `update_matrix.py` and the scheduled **update-matrix** workflow.
+
+---
+
+## Credits
+
+- **[ShirkNeko/GKI_KernelSU_SUSFS](https://github.com/ShirkNeko/GKI_KernelSU_SUSFS)** - the build system this started as a fork of.
+- **[SukiSU-Ultra](https://github.com/SukiSU-Ultra/SukiSU-Ultra)** and **[SukiSU_patch](https://github.com/SukiSU-Ultra/SukiSU_patch)** - root implementation, KPM and extra patches (ZRAM, hooks).
+- **[susfs4ksu](https://gitlab.com/simonpunk/susfs4ksu)** (via [ShirkNeko/susfs4ksu](https://github.com/ShirkNeko/susfs4ksu)) - SUSFS.
+- **[WildKernels/kernel_patches](https://github.com/WildKernels/kernel_patches)** - BBRv3 backport.
+- **[ravindu644/Droidspaces-OSS](https://github.com/ravindu644/Droidspaces-OSS)** - Droidspaces app and kABI-safe patches.
+- **[vc-teahouse/Baseband-guard](https://github.com/vc-teahouse/Baseband-guard)**, **[AnyKernel3](https://github.com/WildPlusKernel/AnyKernel3)**.
+
+## License
+
+This repository's own files are [GPL-3.0-or-later](LICENSE). Kernel patches, firmware and the released kernel images keep their own licenses (GPL-2.0 for kernel code) - see [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
