@@ -31,8 +31,8 @@ Download the latest build from **[Releases](https://github.com/nikakvo/GKI_Kerne
 | **BBR v3** | Newer TCP congestion control (falls back to BBR v1 if the patch doesn't fit) |
 | **BIC, Westwood+, H-TCP** | Extra congestion control algorithms to switch to at runtime |
 | **CAKE qdisc** | Less bufferbloat, lower latency under load |
-| **WireGuard** | In-kernel WireGuard VPN |
-| **[AmneziaWG](https://github.com/amnezia-vpn/amneziawg-linux-kernel-module)** | WireGuard with DPI obfuscation, built in next to WireGuard; works with the AmneziaWG app in kernel mode |
+| **WireGuard** | In-kernel WireGuard VPN (always-on tunnel without an app: [WG Shield](https://github.com/nikakvo/wg-shield-arm64)) |
+| **[AmneziaWG](https://github.com/amnezia-vpn/amneziawg-linux-kernel-module)** | WireGuard with DPI obfuscation, built in next to WireGuard. Use it with [WG Shield](https://github.com/nikakvo/wg-shield-arm64) 2.0+ (the AmneziaWG app falls back to userspace for AmneziaWG configs) |
 | **IP Set** | Fast IP/network sets for iptables (userspace binary: [ipset-arm64](https://github.com/nikakvo/ipset-arm64)) |
 | **TTL / Hop-Limit, CONNMARK** | Netfilter targets for hotspot TTL normalisation and policy routing |
 | **CIFS/SMB** | Mount Windows/Samba shares directly |

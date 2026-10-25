@@ -2688,6 +2688,13 @@ CONFIG_CIFS_XATTR=y
                 "defines it nor can get it from include/util.h in a known way "
                 "(_fixup_susfs_sucompat_util_h). Stopping."
             )
+        if not self._fixup_susfs_pkg_observer_c(ksu_dir):
+            self._mark("susfs_kernelsu_integration", "failed", "pkg_observer.c priority call")
+            raise RuntimeError(
+                "kernel/manager/pkg_observer.c: the susfs_parse_priority_app_strings() "
+                "call from the SUSFS patch is in a place _fixup_susfs_pkg_observer_c() "
+                "doesn't know (patch --fuzz may have put it outside a function). Stopping."
+            )
         if not self._disable_susfs_mount_hide(ksu_dir):
             self._mark("susfs_kernelsu_integration", "failed", "unknown mount_hide shape")
             raise RuntimeError(
@@ -3489,6 +3496,64 @@ CONFIG_CIFS_XATTR=y
             "kernel/Kbuild: SukiSU-Ultra mount view hiding (feature/mount_hide.o) compiled out - "
             "it needs hook/<arch>/patch_memory.o, which the SUSFS patch removes "
             "(see _disable_susfs_mount_hide)."
+        )
+        return True
+
+    _PKG_OBS_FUNC_TOP = (
+        'static void ksu_defer_track_throne(void)\n'
+        '{\n'
+        '    struct callback_head *cb;\n'
+        '\n'
+    )
+    _PKG_OBS_PRIORITY_BLOCK = (
+        '    // Renew the getpriority uid bitmap filter\n'
+        '    susfs_parse_priority_app_strings();\n'
+        '\n'
+    )
+
+    def _fixup_susfs_pkg_observer_c(self, ksu_dir) -> bool:
+        # susfs 0b5f967 (2026-10, priority UID filter) adds a call to
+        # susfs_parse_priority_app_strings() at the top of
+        # ksu_defer_track_throne() in manager/pkg_observer.c. SukiSU-Ultra
+        # 4c15fca1 (2026-10-09) rewrote that function's body (goto style),
+        # so with --fuzz=3 `patch` drops all context and reports
+        # "Hunk #2 succeeded at 42 with fuzz 3" - but the two lines land in
+        # the comment block ABOVE the function, outside any function, and
+        # the compile fails ("conflicting types for
+        # 'susfs_parse_priority_app_strings'"). Fix: take the block out
+        # wherever it is and put it right after `struct callback_head *cb;`
+        # of ksu_defer_track_throne() - exactly where the hunk puts it on
+        # upstream KernelSU. Runs on every SUSFS build. No call in the file
+        # (older susfs) or already in place -> nothing to do. Anything
+        # else -> False, build stops.
+        target = ksu_dir / "kernel/manager/pkg_observer.c"
+        if not target.exists():
+            return True
+        text = target.read_text()
+        call = 'susfs_parse_priority_app_strings();'
+        if call not in text:
+            return True
+        top, block = self._PKG_OBS_FUNC_TOP, self._PKG_OBS_PRIORITY_BLOCK
+        if text.count(call) != 1 or text.count(block) != 1 or text.count(top) != 1:
+            return False
+        if '#include <linux/susfs.h>' not in text:
+            return False
+        if top + block in text:
+            return True  # applied in the right place
+        text = text.replace(block, '', 1)
+        if text.count(top) != 1:
+            return False
+        text = text.replace(top, top + block, 1)
+        if text.count(call) != 1 or (top + block) not in text:
+            return False
+        target.write_text(text)
+        orig = ksu_dir / "kernel/manager/pkg_observer.c.orig"
+        if orig.exists():
+            orig.unlink()
+        logger.info(
+            "kernel/manager/pkg_observer.c: the SUSFS patch's susfs_parse_priority_app_strings() "
+            "call landed outside ksu_defer_track_throne() (fuzz 3, SukiSU rewrote that function). "
+            "Moved it to the top of the function body (see _fixup_susfs_pkg_observer_c)."
         )
         return True
 

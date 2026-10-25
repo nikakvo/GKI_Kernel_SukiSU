@@ -577,7 +577,8 @@ patch_test() {
     fi
     # Same code the build runs: the drift recovery (only when hunks failed),
     # then _disable_susfs_preinit() + _fixup_susfs_sucompat_util_h() +
-    # _disable_susfs_mount_hide() on every SUSFS build.
+    # _fixup_susfs_pkg_observer_c() + _disable_susfs_mount_hide() on every
+    # SUSFS build.
     rec="$(cd "$BUILDER_DIR" && python3 - "$WORKTREE" "$rc" 2>/dev/null <<'PY'
 import sys, logging
 # Only the recovery's own ERROR lines (why it refused) are passed through,
@@ -597,6 +598,9 @@ if ok and not kb.KernelBuilder._disable_susfs_preinit(b, tree):
     ok = False
 if ok and not kb.KernelBuilder._fixup_susfs_sucompat_util_h(b, tree):
     print("REASON=feature/sucompat.c: userspace_stack_buffer() not reachable (_fixup_susfs_sucompat_util_h)")
+    ok = False
+if ok and not kb.KernelBuilder._fixup_susfs_pkg_observer_c(b, tree):
+    print("REASON=manager/pkg_observer.c: susfs priority call in an unknown place (_fixup_susfs_pkg_observer_c)")
     ok = False
 if ok and not kb.KernelBuilder._disable_susfs_mount_hide(b, tree):
     print("REASON=feature/mount_hide: Kbuild/header in an unknown shape (_disable_susfs_mount_hide)")
