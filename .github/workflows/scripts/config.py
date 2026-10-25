@@ -119,13 +119,17 @@ ANDROID_KERNEL_MAP = {
 # a hash is valid on exactly one). Branches not listed build from HEAD.
 # android13-5.15 is built, flashed and daily-driven; 6.1 / 6.6 are
 # verified to patch (incl. _recover_susfs_init_c) but not device-tested.
-DEFAULT_KSU_REF = "2d2f3ed186977bccf885d15a118155e9c9f849d8"
-DEFAULT_KSU_VERSION_CODE = 41042
+DEFAULT_KSU_REF = "d6b36700f3bd0a4c1585549b470dd30bb8774534"
+DEFAULT_KSU_VERSION_CODE = 41068
 DEFAULT_SUSFS_PINS = {
     "gki-android13-5.15": "86b5b10068459dedb545dc5db46a0f0254428eda",
     "gki-android14-6.1": "273ae364c5b7c92ceb15634c9f075b6fc0501048",
     "gki-android15-6.6": "9d9464f191b2d846590ac4d1b52e123df135c401",
 }
+# AmneziaWG kernel module (github.com/amnezia-vpn/amneziawg-linux-kernel-module),
+# built in next to WireGuard. Always a full commit SHA, never a branch.
+# check-release.sh probes upstream master and rewrites this line too.
+DEFAULT_AMNEZIAWG_REF = "4569c4c67f3a57414969260cafbbd04694fbaae0"
 
 KSU_REPO_CONFIG = {"repo_url": "https://github.com/SukiSU-Ultra/SukiSU-Ultra.git",
                     "branch": "main",
@@ -197,6 +201,10 @@ class BuildConfig:
     # стек влиза само като =m и НЕ се пакетира - на устройството
     # се ползват вендорските cfg80211/mac80211 от /vendor/lib/modules.
     use_ath9k: bool = False
+    # AmneziaWG built in (=y) next to WireGuard, from the pinned commit
+    # amneziawg_commit (build.py fills it from DEFAULT_AMNEZIAWG_REF).
+    use_amneziawg: bool = False
+    amneziawg_commit: Optional[str] = None
     use_droidspaces: bool = False
     # Experimental, opt-in: CONFIG_CGROUP_PIDS for Droidspaces --pids-limit
     # via the kABI-neutral net_prio -> pids cgroup slot swap (android13-5.15).
@@ -306,6 +314,8 @@ class BuildConfig:
             "use_bbg": self.use_bbg,
             "allow_bazel": self.allow_bazel,
             "use_ath9k": self.use_ath9k,
+            "use_amneziawg": self.use_amneziawg,
+            "amneziawg_commit": self.amneziawg_commit,
             "use_droidspaces": self.use_droidspaces,
             "use_droidspaces_pids": self.use_droidspaces_pids,
             "support_op8e": self.support_op8e,

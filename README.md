@@ -32,6 +32,7 @@ Download the latest build from **[Releases](https://github.com/nikakvo/GKI_Kerne
 | **BIC, Westwood+, H-TCP** | Extra congestion control algorithms to switch to at runtime |
 | **CAKE qdisc** | Less bufferbloat, lower latency under load |
 | **WireGuard** | In-kernel WireGuard VPN |
+| **[AmneziaWG](https://github.com/amnezia-vpn/amneziawg-linux-kernel-module)** | WireGuard with DPI obfuscation, built in next to WireGuard; works with the AmneziaWG app in kernel mode |
 | **IP Set** | Fast IP/network sets for iptables (userspace binary: [ipset-arm64](https://github.com/nikakvo/ipset-arm64)) |
 | **TTL / Hop-Limit, CONNMARK** | Netfilter targets for hotspot TTL normalisation and policy routing |
 | **CIFS/SMB** | Mount Windows/Samba shares directly |
@@ -110,10 +111,12 @@ Useful `build-kernel.sh` options:
 | `--ksu-version-code <n>` | Version number the kernel reports - must match your manager |
 | `--susfs-commit <ref>` | Other susfs commit, `branch=hash,...`, or `latest` |
 | `--no-ath9k` | Skip the ath9k_htc modules |
+| `--no-amneziawg` | Build without AmneziaWG |
+| `--amneziawg-commit <sha>` | Other amneziawg-linux-kernel-module commit (full SHA) |
 
 ### Checking for updates: `check-release.sh`
 
-SukiSU-Ultra and SUSFS move fast, and the newest commits don't always fit together. `check-release.sh` finds the newest SukiSU-Ultra and susfs commits, applies the SUSFS patch in a throwaway tree with the same recovery code the build uses, and prints the exact build command:
+SukiSU-Ultra and SUSFS move fast, and the newest commits don't always fit together. `check-release.sh` finds the newest SukiSU-Ultra and susfs commits, applies the SUSFS patch in a throwaway tree with the same recovery code the build uses, and prints the exact build command. It checks the newest AmneziaWG commit the same way; one that doesn't fit is left out and the build keeps the last working one:
 
 - **OK ... Build this** - new combination, patches cleanly.
 - **OK ... You're up to date** - nothing new.
@@ -135,6 +138,7 @@ Kernel versions and Google tags come from `.github/workflows/config/matrix.json`
 - **[SukiSU-Ultra](https://github.com/SukiSU-Ultra/SukiSU-Ultra)** and **[SukiSU_patch](https://github.com/SukiSU-Ultra/SukiSU_patch)** - root implementation, KPM and extra patches (ZRAM, hooks).
 - **[susfs4ksu](https://gitlab.com/simonpunk/susfs4ksu)** (via [ShirkNeko/susfs4ksu](https://github.com/ShirkNeko/susfs4ksu)) - SUSFS.
 - **[WildKernels/kernel_patches](https://github.com/WildKernels/kernel_patches)** - BBRv3 backport.
+- **[amnezia-vpn/amneziawg-linux-kernel-module](https://github.com/amnezia-vpn/amneziawg-linux-kernel-module)** - AmneziaWG.
 - **[ravindu644/Droidspaces-OSS](https://github.com/ravindu644/Droidspaces-OSS)** - Droidspaces app and kABI-safe patches.
 - **[vc-teahouse/Baseband-guard](https://github.com/vc-teahouse/Baseband-guard)**, **[AnyKernel3](https://github.com/WildPlusKernel/AnyKernel3)**.
 

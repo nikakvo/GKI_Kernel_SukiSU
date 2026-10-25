@@ -40,8 +40,123 @@ KPM_NEXT_TOOLS_REPO = "https://github.com/SukiSU-Ultra/SukiSU_KernelPatch_patch.
 KPM_NEXT_TOOLS_REF = "e60c6cfd5cea87cccf9adb7e4d4ba583702d443c"
 KPM_NEXT_VERSION = "d09"   # KernelPatch 0.13.9: kptools -v and the kpimg must both say this
 
+# AmneziaWG (WireGuard fork with DPI obfuscation), built in (=y) next to the
+# stock WireGuard. The commit is pinned in config.py (DEFAULT_AMNEZIAWG_REF)
+# so check-release.sh can move it like the SukiSU/susfs pins; a one-off
+# --amneziawg-commit <full sha> overrides it. Never built unpinned.
+# What is changed in the upstream source: see prepare_amneziawg_src().
+AMNEZIAWG_REPO = "https://github.com/amnezia-vpn/amneziawg-linux-kernel-module.git"
+# Branches the integration has been compile- and boot-tested on. Others are
+# skipped (and marked so in PATCH_STATUS.json), never half-built.
+AMNEZIAWG_SUPPORTED = {("android13", "5.15")}
+
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
+
+
+class AmneziaWGPrepareError(RuntimeError):
+    """The upstream AmneziaWG source is in a shape prepare_amneziawg_src()
+    does not know. The message says which step, in plain words."""
+
+
+# (file, exact anchor, text inserted right after it). Each anchor must occur
+# exactly once - anything else means upstream moved and a human looks first.
+_AWG_FIXUPS = (
+    ("Kbuild",
+     "\ninclude $(src)/compat/Kbuild.include\n",
+     "# Android GKI 5.15 lacks some helpers upstream 5.15 stable has; detect, do not guess.\n"
+     "ifeq ($(shell grep -qw timer_delete_sync $(srctree)/include/linux/timer.h && echo y),)\n"
+     "ccflags-y += -DAWG_GKI_NO_TIMER_DELETE_SYNC\n"
+     "endif\n"),
+    ("compat/compat.h",
+     "#define timer_delete_sync(timer) del_timer_sync(timer)\n#endif\n",
+     "\n/* Android GKI: detected from the kernel headers by Kbuild (AWG_GKI_*). */\n"
+     "#if defined(AWG_GKI_NO_TIMER_DELETE_SYNC) && !defined(timer_delete_sync)\n"
+     "#define timer_delete_sync(timer) del_timer_sync(timer)\n"
+     "#endif\n"),
+    ("compat/compat.h",
+     "#define DEV_STATS_ADD(DEV, FIELD, VAL) DEV->stats.FIELD += VAL\n#endif\n",
+     "\n/* Android GKI 5.15 has no DEV_STATS_INC/ADD (not taken from 5.15.86 stable). */\n"
+     "#ifndef DEV_STATS_INC\n"
+     "#define DEV_STATS_INC(DEV, FIELD) ++DEV->stats.FIELD\n"
+     "#endif\n"
+     "#ifndef DEV_STATS_ADD\n"
+     "#define DEV_STATS_ADD(DEV, FIELD, VAL) DEV->stats.FIELD += VAL\n"
+     "#endif\n"),
+)
+
+
+def prepare_amneziawg_src(src: Path, dest: Path) -> str:
+    """Turns the module repo's src/ into an in-tree driver at dest
+    (drivers/net/amneziawg). Shared by the build (add_amneziawg) and by
+    check-release.sh's probe of a newer upstream commit, so the two can
+    never disagree about what "fits". Returns the AmneziaWG version from
+    src/version.h. Raises AmneziaWGPrepareError on any unknown shape.
+
+    1. copy src/ minus tests/ (selftest/ stays: only built with
+       AMNEZIAWG_DEBUG, which we keep off),
+    2. three self-guarding fixups for Android GKI 5.15, which lacks two
+       helpers upstream 5.15 stable has (DEV_STATS_INC/ADD and
+       timer_delete_sync) - on a kernel that has them they do nothing,
+    3. rename every wg_ identifier to awg_. AmneziaWG is a WireGuard fork
+       and keeps WireGuard's global names (95 of them, all wg_*); built in
+       next to CONFIG_WIREGUARD=y they are duplicate symbols at link time.
+       The module has no EXPORT_SYMBOL, so nothing outside it sees a name
+       change, and its netdev type and genl family are "amneziawg" anyway.
+    """
+    src, dest = Path(src), Path(dest)
+    for need in ("Kbuild", "Kconfig", "version.h", "main.c", "compat/compat.h"):
+        if not (src / need).is_file():
+            raise AmneziaWGPrepareError(f"upstream src/ has no {need} - layout changed")
+    m = re.search(r'^#define\s+WIREGUARD_VERSION\s+"([^"]+)"',
+                  (src / "version.h").read_text(), re.M)
+    if not m:
+        raise AmneziaWGPrepareError("src/version.h: no WIREGUARD_VERSION line")
+    version = m.group(1)
+
+    if dest.exists():
+        shutil.rmtree(dest)
+    top = src.resolve()
+    shutil.copytree(src, dest, ignore=lambda d, names:
+                    ["tests"] if Path(d).resolve() == top else [])
+
+    for rel, anchor, addition in _AWG_FIXUPS:
+        f = dest / rel
+        text = f.read_text()
+        n = text.count(anchor)
+        if n != 1:
+            raise AmneziaWGPrepareError(
+                f"{rel}: the line the Android fixup goes after was found {n} "
+                f"time(s), expected exactly 1 ({anchor.strip()!r})")
+        f.write_text(text.replace(anchor, anchor + addition, 1))
+
+    sources = sorted(p for p in dest.rglob("*") if p.suffix in (".c", ".h") and p.is_file())
+    texts = {p: p.read_text(errors="surrogateescape") for p in sources}
+    wg_names = set()
+    awg_names = set()
+    for t in texts.values():
+        wg_names.update(re.findall(r"\bwg_(\w+)", t))
+        awg_names.update(re.findall(r"\bawg_(\w+)", t))
+    clash = sorted(wg_names & awg_names)
+    if clash:
+        raise AmneziaWGPrepareError(
+            "wg_ -> awg_ rename would merge names upstream keeps apart: "
+            + ", ".join(f"wg_{c}/awg_{c}" for c in clash[:5]))
+    aawg_before = sum(t.count("aawg_") for t in texts.values())
+    renamed = 0
+    for p, t in texts.items():
+        new, n = re.subn(r"\bwg_", "awg_", t)
+        if n:
+            renamed += n
+            p.write_text(new, errors="surrogateescape")
+    after = {p: p.read_text(errors="surrogateescape") for p in sources}
+    left = sum(len(re.findall(r"\bwg_", t)) for t in after.values())
+    aawg_after = sum(t.count("aawg_") for t in after.values())
+    if left or aawg_after != aawg_before or renamed == 0:
+        raise AmneziaWGPrepareError(
+            f"wg_ -> awg_ rename check failed ({left} wg_ left, "
+            f"{aawg_after - aawg_before} aawg_ produced, {renamed} renamed)")
+    return version
 
 
 @dataclass
@@ -335,6 +450,7 @@ CONFIG_CIFS_XATTR=y
         # step).
         self.patch_status: dict = {}
         self._bbrv3_applied = False
+        self._amneziawg_version: Optional[str] = None
         self._peak_mem_used_mb: Optional[float] = None
         self._setup_env()
 
@@ -3785,6 +3901,114 @@ CONFIG_CIFS_XATTR=y
         logger.info(f"ath9k: MAC80211_LEDS select removed ({detail})")
         self._mark("ath9k", "applied", detail)
 
+    def _amneziawg_applied(self) -> bool:
+        return self.patch_status.get("amneziawg", {}).get("status") == "applied"
+
+    def _fetch_amneziawg(self, ref: str) -> Path:
+        """The module repo at exactly `ref`, in <workspace>/amneziawg-<sha12>/,
+        fetched once per pin and reused (same pattern as the KPM_NEXT kptools)."""
+        repo = self.workspace / f"amneziawg-{ref[:12]}"
+
+        def head() -> str:
+            r = self._run_cmd(f"git -C {repo} rev-parse HEAD", check=False,
+                              capture_output=True)
+            return (r.stdout or "").strip() if r.returncode == 0 else ""
+
+        if repo.exists() and head() == ref and (repo / "src/Kbuild").is_file():
+            logger.info(f"AmneziaWG: reusing {repo}")
+            return repo
+        if repo.exists():
+            shutil.rmtree(repo)
+        repo.mkdir(parents=True)
+        r = self._run_cmd(
+            f"git -C {repo} init -q && "
+            f"git -C {repo} fetch -q --depth 1 {AMNEZIAWG_REPO} {ref} && "
+            f"git -C {repo} checkout -q FETCH_HEAD", check=False)
+        if r.returncode != 0 or head() != ref:
+            raise RuntimeError(
+                f"AmneziaWG: could not fetch amneziawg-linux-kernel-module "
+                f"{ref[:12]}. Stopping (build without it: --no-amneziawg).")
+        return repo
+
+    def add_amneziawg(self):
+        """AmneziaWG built into the Image (CONFIG_AMNEZIAWG=y) next to the
+        stock WireGuard, which stays exactly as it is.
+
+        The upstream out-of-tree module is copied into
+        drivers/net/amneziawg/ and made in-tree ready by
+        prepare_amneziawg_src() (Android GKI compat + wg_ -> awg_ rename,
+        see there). drivers/net/Kconfig and Makefile get one line each.
+
+        Hard failure on anything unexpected: AmneziaWG is on by default,
+        and a kernel that silently lacks it is the failure mode the
+        post-build checks exist for. --no-amneziawg builds without it.
+        """
+        if not self.config.use_amneziawg:
+            self._mark("amneziawg", "skipped", "not requested")
+            return
+        branch = (self.config.android_version, self.config.kernel_version)
+        if branch not in AMNEZIAWG_SUPPORTED:
+            logger.warning(
+                f"AmneziaWG: not supported on {branch[0]}-{branch[1]} yet "
+                f"(only tested on android13-5.15) - building without it")
+            self._mark("amneziawg", "skipped",
+                       f"not supported on {branch[0]}-{branch[1]} yet")
+            return
+        logger.info("=== AmneziaWG: adding the built-in driver ===")
+        ref = (self.config.amneziawg_commit or "").strip().lower()
+        if not re.fullmatch(r"[0-9a-f]{40}", ref):
+            self._mark("amneziawg", "failed", f"not a full commit SHA: {ref!r}")
+            raise RuntimeError(
+                f"AmneziaWG: '{ref}' is not a full 40-character commit SHA. "
+                f"The module is only ever built from a pinned commit "
+                f"(DEFAULT_AMNEZIAWG_REF in config.py, or --amneziawg-commit).")
+        common_dir = self.work_dir / "common"
+        if not common_dir.exists():
+            self._mark("amneziawg", "failed", "common/ missing")
+            raise RuntimeError("AmneziaWG requested but common/ does not exist")
+
+        repo = self._fetch_amneziawg(ref)
+        dest = common_dir / "drivers/net/amneziawg"
+        try:
+            version = prepare_amneziawg_src(repo / "src", dest)
+        except AmneziaWGPrepareError as e:
+            self._mark("amneziawg", "failed", str(e))
+            raise RuntimeError(
+                f"AmneziaWG {ref[:12]}: {e}. Upstream changed in a way the "
+                f"integration does not know yet. Stopping (build without it: "
+                f"--no-amneziawg, or with the last known-good pin).")
+
+        # (file, line we add, anchor it goes next to, before/after)
+        wiring = (
+            ("drivers/net/Kconfig", 'source "drivers/net/amneziawg/Kconfig"\n',
+             "\nconfig WIREGUARD_DEBUG\n", "before"),
+            ("drivers/net/Makefile", "obj-$(CONFIG_AMNEZIAWG) += amneziawg/\n",
+             "\nobj-$(CONFIG_WIREGUARD) += wireguard/\n", "after"),
+        )
+        for rel, line, anchor, where in wiring:
+            f = common_dir / rel
+            text = f.read_text()
+            have = text.count(line)
+            if have == 1:
+                logger.info(f"AmneziaWG: {rel} already wired")
+                continue
+            if have != 0 or text.count(anchor) != 1:
+                self._mark("amneziawg", "failed", f"{rel}: unknown shape")
+                raise RuntimeError(
+                    f"AmneziaWG: {rel} is not in the expected shape "
+                    f"({have} existing line(s), anchor {anchor.strip()!r} "
+                    f"found {text.count(anchor)} time(s), expected 1). Stopping.")
+            if where == "before":
+                text = text.replace(anchor, "\n" + line + anchor, 1)
+            else:
+                text = text.replace(anchor, anchor + line, 1)
+            f.write_text(text)
+
+        self._amneziawg_version = version
+        detail = f"AmneziaWG {version} @ {ref[:12]} (built-in, wg_ -> awg_)"
+        logger.info(f"AmneziaWG: {detail}")
+        self._mark("amneziawg", "applied", detail)
+
     def collect_ath9k_modules(self) -> list:
         """Collects the four ath9k .ko files and verifies their symbol
         CRCs against the device's vendor wireless stack BEFORE anything
@@ -3944,6 +4168,15 @@ CONFIG_CIFS_XATTR=y
             logger.info("Adding ath9k_htc module configs (--ath9k)")
             with open(config_file, "a") as f:
                 f.write("\n" + (self._ath9k_dir() / "ath9k-modules.fragment").read_text())
+
+        if self._amneziawg_applied():
+            # Only when add_amneziawg() really put the driver in the tree:
+            # an undefined symbol in the defconfig is dropped in silence.
+            logger.info("Adding AmneziaWG config (built in)")
+            with open(config_file, "a") as f:
+                f.write("# === AmneziaWG (WireGuard with DPI obfuscation), built in next to WireGuard ===\n")
+                f.write("CONFIG_AMNEZIAWG=y\n")
+                f.write("# CONFIG_AMNEZIAWG_DEBUG is not set\n")
 
         if self.config.use_zram:
             self._configure_zram()
@@ -4731,6 +4964,8 @@ CONFIG_CIFS_XATTR=y
         # the check starts failing correct builds, which trains people
         # to ignore it.
         checks = [("SUSFS", "fs/susfs.o")]
+        if self._amneziawg_applied():
+            checks.append(("AmneziaWG", "drivers/net/amneziawg/main.o"))
         if self._has_fuse_bpf():
             checks.append(("FUSE-BPF", "fs/fuse/backing.o"))
         else:
@@ -4880,6 +5115,8 @@ CONFIG_CIFS_XATTR=y
         ]
         if self.config.use_kpm:
             symbols.append(("CONFIG_KPM", False))
+        if self._amneziawg_applied():
+            symbols.append(("CONFIG_AMNEZIAWG", True))
         if self._has_fuse_bpf():
             symbols.append(("CONFIG_FUSE_BPF", True))
         if self.config.use_bbg:
@@ -4976,6 +5213,13 @@ CONFIG_CIFS_XATTR=y
             # subsystems - exactly the kABI break the slot swap avoids.
             out.append(("CONFIG_CGROUP_PIDS", "y", True))
             out.append(("CONFIG_CGROUP_NET_PRIO", None, True))
+        if self._amneziawg_applied():
+            # =m would pass a presence check and ship a kernel without it
+            # (nothing loads a .ko from the build); stock WireGuard must
+            # stay built in next to it.
+            out.append(("CONFIG_AMNEZIAWG", "y", True))
+            out.append(("CONFIG_AMNEZIAWG_DEBUG", None, True))
+            out.append(("CONFIG_WIREGUARD", "y", True))
         if self.config.use_ath9k:
             for line in self._ath9k_fragment_lines():
                 if line.startswith("CONFIG_") and "=" in line:
@@ -5538,6 +5782,9 @@ CONFIG_CIFS_XATTR=y
             # Droidspaces' files, but applied here too for consistency
             # (all optional features settled before writing defconfig).
             self.apply_bbrv3_patches()
+            # New driver dir + one line each in drivers/net/{Kconfig,Makefile}:
+            # no overlap with SUSFS / Droidspaces / BBRv3.
+            self.add_amneziawg()
             # Before configure_kernel(), like every other feature: it
             # edits Kconfig, and the fragment written below depends on
             # that edit having happened.

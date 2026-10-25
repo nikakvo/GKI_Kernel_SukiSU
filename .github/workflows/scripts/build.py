@@ -10,7 +10,8 @@ from datetime import datetime
 sys.path.insert(0, str(Path(__file__).parent))
 
 from config import (BuildConfig, AndroidVersion, KernelVersion, ANDROID_KERNEL_MAP, KSUVersion,
-                    DEFAULT_KSU_REF, DEFAULT_KSU_VERSION_CODE, DEFAULT_SUSFS_PINS)
+                    DEFAULT_KSU_REF, DEFAULT_KSU_VERSION_CODE, DEFAULT_SUSFS_PINS,
+                    DEFAULT_AMNEZIAWG_REF)
 from kernel_builder import KernelBuilder, BuildResult
 
 logging.basicConfig(
@@ -102,6 +103,15 @@ def parse_args() -> argparse.Namespace:
                              "deliberately NOT shipped - the device loads Qualcomm's "
                              "from /vendor/lib/modules. Post-build the module CRCs "
                              "are checked against that vendor stack.")
+    parser.add_argument("--amneziawg", action="store_true",
+                        help="Build AmneziaWG (WireGuard with DPI obfuscation) into the "
+                             "Image, CONFIG_AMNEZIAWG=y next to the stock WireGuard. "
+                             "android13-5.15 only for now; skipped on other branches.")
+    parser.add_argument("--amneziawg-commit", default=None,
+                        help=f"Full 40-character commit SHA of amneziawg-linux-kernel-module "
+                             f"to build. Default: DEFAULT_AMNEZIAWG_REF in config.py "
+                             f"({DEFAULT_AMNEZIAWG_REF[:8]}). check-release.sh prints this "
+                             f"when upstream has a newer commit that fits.")
     parser.add_argument("--droidspaces", action="store_true",
                         help="Enable Droidspaces (github.com/ravindu644/Droidspaces-OSS) container-runtime "
                              "support - real Linux namespace isolation (PID/IPC/Mount) instead of a plain "
@@ -180,11 +190,16 @@ def resolve_pins(args: argparse.Namespace):
     logger.info(f"KSU version code:  {code if code else 'live GitHub count'}")
     logger.info(f"susfs pin(s):      {susfs or 'branch HEAD'}"
                 + (" (default, config.py)" if not args.susfs_commit else ""))
-    return ksu_ref, code, susfs
+
+    awg = (args.amneziawg_commit or "").strip().lower() or DEFAULT_AMNEZIAWG_REF
+    if args.amneziawg:
+        logger.info(f"AmneziaWG commit:  {awg}"
+                    + (" (default, config.py)" if not args.amneziawg_commit else ""))
+    return ksu_ref, code, susfs, awg
 
 
 def create_build_config(args: argparse.Namespace) -> BuildConfig:
-    ksu_ref, ksu_code, susfs_pin = resolve_pins(args)
+    ksu_ref, ksu_code, susfs_pin, awg_ref = resolve_pins(args)
     return BuildConfig(
         android_version=args.android or "android14",
         kernel_version=args.kernel or "6.1",
@@ -203,6 +218,8 @@ def create_build_config(args: argparse.Namespace) -> BuildConfig:
         use_bbg=args.bbg,
         allow_bazel=args.allow_bazel,
         use_ath9k=args.ath9k,
+        use_amneziawg=args.amneziawg,
+        amneziawg_commit=awg_ref,
         use_droidspaces=args.droidspaces,
         use_droidspaces_pids=args.droidspaces_pids,
         support_op8e=args.op8e,

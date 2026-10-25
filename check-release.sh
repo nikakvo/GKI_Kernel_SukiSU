@@ -29,10 +29,16 @@
 #   5. remembers that suggestion, and on the NEXT run asks whether you built,
 #      flashed and tested it - answer 1 and it updates the known-good pins
 #      in config.py by itself.
+#   6. (android13-5.15) takes amneziawg-linux-kernel-module master HEAD and
+#      runs the build's own prepare_amneziawg_src() on it. If it fits, the
+#      commands get --amneziawg-commit <HEAD> and answer 1 saves it too; if
+#      not, the build keeps the known-good AmneziaWG pin - a broken AmneziaWG
+#      upstream never blocks a kernel. (No compile here: the build proves it.)
 #
 # The known-good pins live in ONE place:
 #   .github/workflows/scripts/config.py
-#     DEFAULT_KSU_REF, DEFAULT_KSU_VERSION_CODE, DEFAULT_SUSFS_PINS
+#     DEFAULT_KSU_REF, DEFAULT_KSU_VERSION_CODE, DEFAULT_SUSFS_PINS,
+#     DEFAULT_AMNEZIAWG_REF
 # They are what every unpinned build uses (build-kernel.sh, build.py, both
 # Actions workflows), so saving here also moves the defaults for forks/CI.
 #
@@ -44,6 +50,7 @@ BRANCH="gki-android13-5.15"
 
 SUKI_URL="https://github.com/SukiSU-Ultra/SukiSU-Ultra.git"
 SUSFS_URL="https://github.com/ShirkNeko/susfs4ksu.git"
+AWG_URL="https://github.com/amnezia-vpn/amneziawg-linux-kernel-module.git"
 CACHE="${GKI_CHECK_CACHE:-$HOME/.cache/gki-check}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 BUILDER_DIR="$SCRIPT_DIR/.github/workflows/scripts"
@@ -92,16 +99,19 @@ vals = {}
 for n in ast.parse(open(sys.argv[1]).read()).body:
     if isinstance(n, ast.Assign) and len(n.targets) == 1:
         name = getattr(n.targets[0], "id", None)
-        if name in ("DEFAULT_KSU_REF", "DEFAULT_KSU_VERSION_CODE", "DEFAULT_SUSFS_PINS"):
+        if name in ("DEFAULT_KSU_REF", "DEFAULT_KSU_VERSION_CODE", "DEFAULT_SUSFS_PINS",
+                    "DEFAULT_AMNEZIAWG_REF"):
             vals[name] = ast.literal_eval(n.value)
 print(f"PINNED_KSU_REF={vals.get('DEFAULT_KSU_REF', '')}")
 print(f"PINNED_KSU_VERSION_CODE={vals.get('DEFAULT_KSU_VERSION_CODE', '')}")
+print(f"PINNED_AWG_REF={vals.get('DEFAULT_AMNEZIAWG_REF', '')}")
 for b, r in vals.get("DEFAULT_SUSFS_PINS", {}).items():
     print(f"SUSFS {b} {r}")
 PY
 )" || return 1
     PINNED_KSU_REF="$(printf '%s\n' "$out" | sed -n 's/^PINNED_KSU_REF=//p')"
     PINNED_KSU_VERSION_CODE="$(printf '%s\n' "$out" | sed -n 's/^PINNED_KSU_VERSION_CODE=//p')"
+    PINNED_AWG_REF="$(printf '%s\n' "$out" | sed -n 's/^PINNED_AWG_REF=//p')"
     declare -gA PINNED_SUSFS=()
     while read -r _ b r; do PINNED_SUSFS[$b]="$r"; done \
         < <(printf '%s\n' "$out" | grep '^SUSFS ')
@@ -129,6 +139,13 @@ sync_repo "$SUSFS_URL" "$SUSFS" "susfs4ksu"    || exit 1
 SKPATCH_URL="https://github.com/ShirkNeko/SukiSU_patch.git"
 SKPATCH="$CACHE/SukiSU_patch"
 sync_repo "$SKPATCH_URL" "$SKPATCH" "SukiSU_patch (KPM patcher)" || SKPATCH=""
+# AmneziaWG (never stops the run: on any trouble the known-good pin is used)
+AWGREPO="$CACHE/amneziawg-linux-kernel-module"
+if [ "$BRANCH" = "gki-android13-5.15" ]; then
+    sync_repo "$AWG_URL" "$AWGREPO" "amneziawg-linux-kernel-module" || AWGREPO=""
+else
+    AWGREPO=""
+fi
 
 sha_of()   { git -C "$1" rev-parse -q --verify "$2^{commit}" 2>/dev/null; }
 
@@ -151,13 +168,16 @@ short_susfs() { local p; p="$(susfs_p "$1")"; printf '%s' "${1:0:8}${p:+"+${p:0:
 PENDING="$CACHE/pending-$BRANCH"
 BROKEN="$CACHE/broken-$BRANCH"
 touch "$BROKEN"
+# AmneziaWG commits marked broken (answer 3), one full SHA per line.
+AWG_BROKEN="$CACHE/broken-amneziawg"
+touch "$AWG_BROKEN"
 
-save_pins() {   # $1=ksu sha  $2=susfs sha  $3=version code  -> edits config.py
+save_pins() {   # $1=ksu sha  $2=susfs sha  $3=version code  [$4=amneziawg sha] -> edits config.py
     # temp file in the same dir so the final mv is an atomic rename
     local tmp; tmp="$(mktemp "$BUILDER_DIR/.config.py.XXXXXX")" || return 1
-    python3 - "$CONFIG_PY" "$tmp" "$BRANCH" "$1" "$2" "$3" <<'PY' || { rm -f "$tmp"; return 1; }
+    python3 - "$CONFIG_PY" "$tmp" "$BRANCH" "$1" "$2" "$3" "${4:-}" <<'PY' || { rm -f "$tmp"; return 1; }
 import ast, re, sys
-src_path, dst, branch, ksu, susfs, code = sys.argv[1:]
+src_path, dst, branch, ksu, susfs, code, awg = sys.argv[1:]
 s = open(src_path).read()
 
 def sub1(pattern, repl, text):
@@ -170,6 +190,10 @@ if branch == "gki-android13-5.15":
     # the phone build moves the SukiSU pin + version code too
     s = sub1(r'^DEFAULT_KSU_REF = "[^"]*"', f'DEFAULT_KSU_REF = "{ksu}"', s)
     s = sub1(r'^DEFAULT_KSU_VERSION_CODE = \d+', f'DEFAULT_KSU_VERSION_CODE = {code}', s)
+if awg:
+    if not re.fullmatch(r"[0-9a-f]{40}", awg):
+        sys.exit(f"not a full AmneziaWG commit SHA: {awg}")
+    s = sub1(r'^DEFAULT_AMNEZIAWG_REF = "[^"]*"', f'DEFAULT_AMNEZIAWG_REF = "{awg}"', s)
 
 line = re.compile(r'^(\s*)"' + re.escape(branch) + r'": "[0-9a-f+]*",', re.M)
 if line.search(s):
@@ -188,6 +212,8 @@ assert pins.get(branch) == susfs
 if branch == "gki-android13-5.15":
     assert ast.literal_eval(vals["DEFAULT_KSU_REF"]) == ksu
     assert ast.literal_eval(vals["DEFAULT_KSU_VERSION_CODE"]) == int(code)
+if awg:
+    assert ast.literal_eval(vals["DEFAULT_AMNEZIAWG_REF"]) == awg
 open(dst, "w").write(s)
 PY
     chmod --reference="$CONFIG_PY" "$tmp" 2>/dev/null
@@ -195,14 +221,18 @@ PY
 }
 
 if [ -s "$PENDING" ]; then
-    read -r P_KSU P_SUSFS P_CODE P_DATE < "$PENDING"
+    # 5th field (AmneziaWG sha) is empty in files written by older versions
+    read -r P_KSU P_SUSFS P_CODE P_DATE P_AWG < "$PENDING"
     PIN_NOW="$(git -C "$SUKI" rev-parse -q --verify "$PINNED_KSU_REF^{commit}" 2>/dev/null)"
-    if [ "$P_KSU" = "$PIN_NOW" ] && [ "$P_SUSFS" = "$(norm_susfs "${PINNED_SUSFS[$BRANCH]:-}")" ]; then
+    P_KSU_SAVED=0
+    [ "$P_KSU" = "$PIN_NOW" ] && [ "$P_SUSFS" = "$(norm_susfs "${PINNED_SUSFS[$BRANCH]:-}")" ] && P_KSU_SAVED=1
+    if [ "$P_KSU_SAVED" = 1 ] && { [ -z "${P_AWG:-}" ] || [ "$P_AWG" = "$PINNED_AWG_REF" ]; }; then
         rm -f "$PENDING"          # already saved (e.g. by hand)
     elif [ "$ASK" = 1 ] && [ -t 0 ]; then
         hdr "Last suggested build ($P_DATE)"
         echo "  SukiSU  ${P_KSU:0:8}   version $P_CODE"
         echo "  susfs   $(short_susfs "$P_SUSFS")   ($BRANCH)"
+        [ -n "${P_AWG:-}" ] && echo "  AmneziaWG ${P_AWG:0:8}"
         echo
         echo "  Did you build, flash and test it?"
         echo "    1) Yes, it works  - save it as the new known-good build"
@@ -211,11 +241,12 @@ if [ -s "$PENDING" ]; then
         read -rp "  Choice [1/2/3, Enter = 2]: " ans
         case "$ans" in
             1)
-                if save_pins "$P_KSU" "$P_SUSFS" "$P_CODE"; then
+                if save_pins "$P_KSU" "$P_SUSFS" "$P_CODE" "${P_AWG:-}"; then
                     rm -f "$PENDING"
                     [ "$BRANCH" = "gki-android13-5.15" ] && {
                         PINNED_KSU_REF="$P_KSU"; PINNED_KSU_VERSION_CODE="$P_CODE"; }
                     PINNED_SUSFS[$BRANCH]="$P_SUSFS"
+                    [ -n "${P_AWG:-}" ] && PINNED_AWG_REF="$P_AWG"
                     ok "Saved as the known-good build in config.py."
                     echo "        Upload .github/workflows/scripts/config.py to GitHub too -"
                     echo "        that also moves the default pins for CI and forks."
@@ -223,9 +254,18 @@ if [ -s "$PENDING" ]; then
                     bad "Could not update config.py - pins unchanged. Edit them by hand."
                 fi ;;
             3)
-                echo "$P_KSU $P_SUSFS $P_DATE" >> "$BROKEN"
+                # Mark only what was new in that build: a new AmneziaWG on
+                # top of the known-good SukiSU/susfs must not block those.
+                if [ "$P_KSU_SAVED" = 0 ]; then
+                    echo "$P_KSU $P_SUSFS $P_DATE" >> "$BROKEN"
+                    warn "SukiSU ${P_KSU:0:8} + susfs $(short_susfs "$P_SUSFS") marked as broken (list: $BROKEN)."
+                fi
+                if [ -n "${P_AWG:-}" ] && [ "$P_AWG" != "$PINNED_AWG_REF" ]; then
+                    echo "$P_AWG" >> "$AWG_BROKEN"
+                    warn "AmneziaWG ${P_AWG:0:8} marked as broken (list: $AWG_BROKEN)."
+                fi
                 rm -f "$PENDING"
-                warn "Marked as broken. It won't be suggested again (list: $BROKEN)." ;;
+                echo "        It won't be suggested again." ;;
             *)
                 echo "  OK, asking again next time." ;;
         esac
@@ -417,6 +457,87 @@ kpm_patcher_report() {
     fi
 }
 kpm_patcher_report
+
+# ---- 2c. AmneziaWG (android13-5.15 only) ------------------------------------
+# Probes master HEAD with the build's own prepare_amneziawg_src() (copy,
+# Android fixups, wg_ -> awg_ rename) - no compile. FIT: the build commands
+# get --amneziawg-commit <HEAD>. NO FIT: they don't, so the build uses the
+# known-good DEFAULT_AMNEZIAWG_REF and AmneziaWG still ships. Never a STOP.
+AWG_USE="$PINNED_AWG_REF"; AWG_NEW=0; AWG_VER=""
+awg_version_of() {   # $1=ref -> AmneziaWG version from src/version.h
+    git -C "$AWGREPO" show "$1:src/version.h" 2>/dev/null \
+        | sed -n 's/^#define[[:space:]]*WIREGUARD_VERSION[[:space:]]*"\([^"]*\)".*/\1/p' | head -n 1
+}
+amneziawg_report() {
+    local head pin_full tmp out
+    [ "$BRANCH" = "gki-android13-5.15" ] || return 0
+    hdr "AmneziaWG (amneziawg-linux-kernel-module)"
+    if [ -z "$PINNED_AWG_REF" ]; then
+        warn "No DEFAULT_AMNEZIAWG_REF in config.py - nothing to compare against."
+        return 0
+    fi
+    if [ -z "$AWGREPO" ]; then
+        warn "Could not reach the repo - the build uses the known-good ${PINNED_AWG_REF:0:8}."
+        return 0
+    fi
+    head="$(sha_of "$AWGREPO" origin/master)"
+    pin_full="$(sha_of "$AWGREPO" "$PINNED_AWG_REF")"
+    if [ -z "$head" ]; then
+        warn "No master branch upstream - the build uses the known-good ${PINNED_AWG_REF:0:8}."
+        return 0
+    fi
+    echo "  built  ${PINNED_AWG_REF:0:8}  $(awg_version_of "$PINNED_AWG_REF")"
+    if [ "$head" = "$pin_full" ]; then
+        ok "Upstream master is the known-good commit - up to date."
+        return 0
+    fi
+    if [ -n "$pin_full" ] && git -C "$AWGREPO" merge-base --is-ancestor "$pin_full" "$head" 2>/dev/null; then
+        echo "  HEAD   ${head:0:8}  $(awg_version_of "$head")  ($(git -C "$AWGREPO" rev-list --count "$pin_full..$head") new):"
+        git -C "$AWGREPO" log --oneline --no-decorate "$pin_full..$head" 2>/dev/null \
+            | head -n 15 | sed 's/^/      /'
+    else
+        echo "  HEAD   ${head:0:8}  $(awg_version_of "$head")  (the known-good commit is not in master's history)"
+    fi
+    if grep -qxF "$head" "$AWG_BROKEN" 2>/dev/null; then
+        tried "You marked AmneziaWG ${head:0:8} as broken earlier."
+        echo "        Keeping the known-good ${PINNED_AWG_REF:0:8}. To allow it again, delete its line in:"
+        echo "        $AWG_BROKEN"
+        return 0
+    fi
+    tmp="$(mktemp -d)"
+    if ! git -C "$AWGREPO" archive "$head" src 2>/dev/null | tar -x -C "$tmp" 2>/dev/null \
+       || [ ! -d "$tmp/src" ]; then
+        rm -rf "$tmp"
+        warn "Could not read src/ of ${head:0:8} - keeping the known-good ${PINNED_AWG_REF:0:8}."
+        return 0
+    fi
+    out="$(cd "$BUILDER_DIR" && python3 - "$tmp/src" "$tmp/out" 2>/dev/null <<'AWGPY'
+import sys, logging
+logging.disable(logging.CRITICAL)
+sys.path.insert(0, '.')
+import kernel_builder as kb
+try:
+    print("AWG_FIT=" + kb.prepare_amneziawg_src(sys.argv[1], sys.argv[2]))
+except kb.AmneziaWGPrepareError as e:
+    print("AWG_NOFIT=" + str(e))
+AWGPY
+)"
+    rm -rf "$tmp"
+    if printf '%s\n' "$out" | grep -q '^AWG_FIT='; then
+        AWG_VER="$(printf '%s\n' "$out" | sed -n 's/^AWG_FIT=//p' | head -n 1)"
+        AWG_USE="$head"; AWG_NEW=1
+        ok "AmneziaWG ${head:0:8} ($AWG_VER) fits: Android fixups and the wg_ -> awg_ rename apply."
+        echo "        Not compiled here - the build is the real test (no warnings in"
+        echo "        drivers/net/amneziawg, amneziawg -> applied in PATCH_STATUS.json)."
+    elif printf '%s\n' "$out" | grep -q '^AWG_NOFIT='; then
+        tried "AmneziaWG ${head:0:8}: $(printf '%s\n' "$out" | sed -n 's/^AWG_NOFIT=//p' | head -n 1)"
+        echo "        The build keeps the known-good ${PINNED_AWG_REF:0:8} - AmneziaWG still ships."
+        echo "        Send this output for a look (the fixups need an update)."
+    else
+        warn "Could not run kernel_builder.py (python error) - keeping the known-good ${PINNED_AWG_REF:0:8}."
+    fi
+}
+amneziawg_report
 
 # ---- 3. the real test: apply + run the pipeline's own recovery ---------------
 KSU_PATCH_REL="kernel_patches/KernelSU/10_enable_susfs_for_ksu.patch"
@@ -667,7 +788,7 @@ if [ "$VERDICT" = "STOP" ]; then
     exit 1
 fi
 
-if [ "$KSU_NEW" = 0 ] && [ "$SUSFS_NEW" = 0 ]; then
+if [ "$KSU_NEW" = 0 ] && [ "$SUSFS_NEW" = 0 ] && [ "$AWG_NEW" = 0 ]; then
     ok "Nothing new since the last build (${PIN_SHA:0:8} / $(short_susfs "$SUSFS_USE")). You're up to date."
     echo
     echo "  Rebuild command, if you need it (new kernel sub_level etc.):"
@@ -675,7 +796,12 @@ else
     ok "Something new and it patches cleanly. ${B}Build this:${N}"
     [ "$SUSFS_HELD" = 1 ] && \
         echo "        (new SukiSU, susfs stays on $(short_susfs "$SUSFS_USE") - newer susfs ${SUSFS_HEAD:0:8} doesn't fit yet)"
+    [ "$AWG_NEW" = 1 ] && [ "$KSU_NEW" = 0 ] && [ "$SUSFS_NEW" = 0 ] && \
+        echo "        (only AmneziaWG is new: ${AWG_USE:0:8}, $AWG_VER)"
 fi
+# AmneziaWG is on by default in build-kernel.sh; the flag only moves the commit.
+AWG_ARG=""
+[ "$AWG_NEW" = 1 ] && AWG_ARG=" --amneziawg-commit $AWG_USE"
 
 if [ "$CAND_CODE" = "?" ]; then
     warn "Could not compute the version code - read it from the manager instead."
@@ -685,7 +811,7 @@ fi
 echo
 echo "  ${C}./build-kernel.sh ${EXTRA}--ksu-commit $CAND_SHA \\"
 echo "    --susfs-commit $SUSFS_USE \\"
-echo "    --ksu-version-code $CAND_CODE${N}"
+echo "    --ksu-version-code $CAND_CODE${AWG_ARG}${N}"
 echo
 echo "  $MENU"
 if [ "$BRANCH" = "gki-android13-5.15" ]; then
@@ -694,18 +820,18 @@ if [ "$BRANCH" = "gki-android13-5.15" ]; then
     echo "  via the net_prio slot swap). Test builds only, files get a \"-pids\" marker:"
     echo "  ${C}./build-kernel.sh --ksu-commit $CAND_SHA \\"
     echo "    --susfs-commit $SUSFS_USE \\"
-    echo "    --ksu-version-code $CAND_CODE --pids${N}"
+    echo "    --ksu-version-code $CAND_CODE --pids${AWG_ARG}${N}"
     echo
     echo "  ${Y}KPM next${N} - same --pids build with KernelPatch 0.13.9 for KPM"
     echo "  (pinned kptools + kpimg, see KPM_NEXT_* in kernel_builder.py):"
     echo "  ${C}./build-kernel.sh --ksu-commit $CAND_SHA \\"
     echo "    --susfs-commit $SUSFS_USE \\"
-    echo "    --ksu-version-code $CAND_CODE --pids --kpm-next${N}"
+    echo "    --ksu-version-code $CAND_CODE --pids --kpm-next${AWG_ARG}${N}"
 fi
 
-if [ "$KSU_NEW" = 1 ] || [ "$SUSFS_NEW" = 1 ]; then
+if [ "$KSU_NEW" = 1 ] || [ "$SUSFS_NEW" = 1 ] || [ "$AWG_NEW" = 1 ]; then
     [ "$CAND_CODE" != "<manager version>" ] && \
-        echo "$CAND_SHA $SUSFS_USE $CAND_CODE $(date +%F)" > "$PENDING"
+        echo "$CAND_SHA $SUSFS_USE $CAND_CODE $(date +%F) $AWG_USE" > "$PENDING"
     echo
     echo "  Before flashing:"
     echo "   1. Manager: install the SukiSU CI build for commit ${CAND_SHA:0:8} and"
@@ -715,6 +841,9 @@ if [ "$KSU_NEW" = 1 ] || [ "$SUSFS_NEW" = 1 ]; then
     echo "        SukiSU-Ultra version: $CAND_CODE [...-${CAND_SHA:0:8}@HEAD]"
     echo "        susfs_kernelsu_integration -> applied"
     echo "        image_ikconfig             -> all expected present"
+    if [ "$BRANCH" = "gki-android13-5.15" ] && [ -n "$AWG_USE" ]; then
+        echo "        amneziawg                  -> applied (AmneziaWG $(awg_version_of "$AWG_USE") @ ${AWG_USE:0:12})"
+    fi
     echo "   3. After it boots: manager shows ${CAND_CODE}-${MAIN_UAPI} for both, check-features.sh is clean."
     echo "   4. Run ${B}./check-release.sh${N} again - it will ask if this build works."
     echo "      Answer 1 and it saves these values into config.py by itself."

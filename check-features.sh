@@ -309,6 +309,31 @@ fi
 
 check_cfg "WireGuard" CONFIG_WIREGUARD
 
+# AmneziaWG, built in next to WireGuard. Kernels before it was added
+# simply don't have the symbol: NOT BUILT, not MISSING.
+_awg=$(cfg CONFIG_AMNEZIAWG 2>/dev/null)
+if [ "$HAVE_CFG" != 1 ]; then
+    row na "AmneziaWG" "/proc/config.gz not readable - cannot check CONFIG_AMNEZIAWG"
+elif [ -z "$_awg" ]; then
+    row off "AmneziaWG" "CONFIG_AMNEZIAWG not in this kernel (older build, or built with --no-amneziawg)"
+elif [ "$_awg" != y ]; then
+    row bad "AmneziaWG" "CONFIG_AMNEZIAWG=$_awg (must be =y, built in)"
+else
+    _awgver=$(cat /sys/module/amneziawg/version 2>/dev/null)
+    if [ -z "$_awgver" ]; then
+        row bad "AmneziaWG" "CONFIG_AMNEZIAWG=y but /sys/module/amneziawg/version is missing"
+    elif have ip && [ "$(id -u)" = 0 ]; then
+        if ip link add gkichk_awg type amneziawg >/dev/null 2>&1; then
+            ip link del gkichk_awg >/dev/null 2>&1
+            row ok "AmneziaWG $_awgver" "CONFIG_AMNEZIAWG=y; amneziawg interface created and removed"
+        else
+            row bad "AmneziaWG $_awgver" "CONFIG_AMNEZIAWG=y but 'ip link add ... type amneziawg' failed"
+        fi
+    else
+        row ok "AmneziaWG $_awgver" "CONFIG_AMNEZIAWG=y (runtime test skipped - no ip binary or not root)"
+    fi
+fi
+
 if cfg_is CONFIG_IP_SET y; then
     if have ipset && [ "$(id -u)" = 0 ]; then
         if ipset create gkichk hash:ip >/dev/null 2>&1; then

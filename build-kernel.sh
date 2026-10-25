@@ -95,6 +95,7 @@ LOGFILE="$HOME/build-$(date +%Y%m%d-%H%M%S).log"
 #                         too, or the number won't match your manager)
 KSU_COMMIT=""
 SUSFS_COMMIT=""
+AMNEZIAWG_COMMIT=""
 NO_HIDE_STUFF=""
 PIDS_CLI=""
 while [ "$#" -gt 0 ]; do
@@ -141,6 +142,23 @@ while [ "$#" -gt 0 ]; do
             export KPM_NEXT=1
             shift
             ;;
+        --amneziawg-commit)
+            # One build from another amneziawg-linux-kernel-module commit
+            # (full 40-char SHA). Empty = DEFAULT_AMNEZIAWG_REF in config.py.
+            # check-release.sh prints this when a newer upstream commit fits.
+            AMNEZIAWG_COMMIT="$2"
+            shift 2
+            ;;
+        --amneziawg-commit=*)
+            AMNEZIAWG_COMMIT="${1#--amneziawg-commit=}"
+            shift
+            ;;
+        --no-amneziawg)
+            # Build without AmneziaWG (A/B test builds; other branches
+            # skip it on their own, see AMNEZIAWG below).
+            NO_AMNEZIAWG="1"
+            shift
+            ;;
         --no-ath9k)
             # ath9k_htc support needs a per-branch
             # ath9k_htc_no_mac80211_leds_<branch>.patch (the MAC80211_LEDS
@@ -152,7 +170,7 @@ while [ "$#" -gt 0 ]; do
             ;;
         *)
             echo "Unknown argument: $1"
-            echo "Usage: $0 [--ksu-commit <tag|commit|branch>] [--susfs-commit <commit|branch=commit,...|latest>] [--ksu-version-code <N>] [--no-hide-stuff] [--no-ath9k] [--pids] [--kpm-next]"
+            echo "Usage: $0 [--ksu-commit <tag|commit|branch>] [--susfs-commit <commit|branch=commit,...|latest>] [--ksu-version-code <N>] [--no-hide-stuff] [--no-ath9k] [--no-amneziawg] [--amneziawg-commit <sha>] [--pids] [--kpm-next]"
             echo "Without pin flags, the known-good pins from .github/workflows/scripts/config.py are used."
             exit 1
             ;;
@@ -244,6 +262,16 @@ EXTRA_NET="1"
 # that currently ships the required no_mac80211_leds patch).
 ATH9K="1"
 [ -n "$NO_ATH9K" ] && ATH9K=""
+
+# AMNEZIAWG: AmneziaWG (WireGuard with DPI obfuscation) built into the
+# Image as CONFIG_AMNEZIAWG=y, next to the stock WireGuard (which stays
+# exactly as it is). Interface type "amneziawg"; the AmneziaWG app uses it
+# in kernel mode. Source: amneziawg-linux-kernel-module at the commit pinned
+# in config.py (DEFAULT_AMNEZIAWG_REF), or --amneziawg-commit <sha>.
+# android13-5.15 only for now - other branches build without it by themselves.
+# Set to "" to build without it, or pass --no-amneziawg.
+AMNEZIAWG="1"
+[ -n "$NO_AMNEZIAWG" ] && AMNEZIAWG=""
 # Pin the version number SukiSU reports (must match the manager).
 # Empty = DEFAULT_KSU_VERSION_CODE from config.py when building the default
 # SukiSU pin, otherwise the live GitHub count.
@@ -393,6 +421,8 @@ for key, entries in data.items():
         [ -n "$BBG" ] && EXTRA_ARGS+=(--bbg)
         [ -n "$EXTRA_NET" ] && EXTRA_ARGS+=(--extra-net)
         [ -n "$ATH9K" ] && EXTRA_ARGS+=(--ath9k)
+        [ -n "$AMNEZIAWG" ] && EXTRA_ARGS+=(--amneziawg)
+        [ -n "$AMNEZIAWG_COMMIT" ] && EXTRA_ARGS+=(--amneziawg-commit "$AMNEZIAWG_COMMIT")
         [ -n "$KSU_VERSION_CODE" ] && EXTRA_ARGS+=(--ksu-version-code "$KSU_VERSION_CODE")
         [ -n "$USE_ZRAM" ] && EXTRA_ARGS+=(--zram)
         [ -z "$USE_MGLRU" ] && EXTRA_ARGS+=(--no-mglru)
@@ -470,6 +500,11 @@ echo "  OS Patch: $OS_PATCH"
 [ -n "$KERNEL_TAG" ] && echo "  Kernel Tag: $KERNEL_TAG"
 [ -n "$DROIDSPACES_PIDS" ] && echo "  Droidspaces pids: ON (experimental test build, files get -pids)"
 [ -n "$KPM_NEXT" ] && echo "  KPM: KernelPatch 0.13.9 (--kpm-next)"
+if [ -n "$AMNEZIAWG" ]; then
+    echo "  AmneziaWG: ON (built in)${AMNEZIAWG_COMMIT:+, commit $AMNEZIAWG_COMMIT}"
+else
+    echo "  AmneziaWG: OFF (--no-amneziawg)"
+fi
 echo ""
 
 EXTRA_ARGS=()
@@ -480,6 +515,8 @@ EXTRA_ARGS=()
 [ -n "$BBG" ] && EXTRA_ARGS+=(--bbg)
 [ -n "$EXTRA_NET" ] && EXTRA_ARGS+=(--extra-net)
 [ -n "$ATH9K" ] && EXTRA_ARGS+=(--ath9k)
+[ -n "$AMNEZIAWG" ] && EXTRA_ARGS+=(--amneziawg)
+[ -n "$AMNEZIAWG_COMMIT" ] && EXTRA_ARGS+=(--amneziawg-commit "$AMNEZIAWG_COMMIT")
 [ -n "$KSU_VERSION_CODE" ] && EXTRA_ARGS+=(--ksu-version-code "$KSU_VERSION_CODE")
 [ -n "$USE_ZRAM" ] && EXTRA_ARGS+=(--zram)
 [ -z "$USE_MGLRU" ] && EXTRA_ARGS+=(--no-mglru)
