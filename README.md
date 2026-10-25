@@ -116,7 +116,7 @@ Useful `build-kernel.sh` options:
 
 ### Checking for updates: `check-release.sh`
 
-SukiSU-Ultra and SUSFS move fast, and the newest commits don't always fit together. `check-release.sh` finds the newest SukiSU-Ultra and susfs commits, applies the SUSFS patch in a throwaway tree with the same recovery code the build uses, and prints the exact build command. It checks the newest AmneziaWG commit the same way; one that doesn't fit is left out and the build keeps the last working one:
+SukiSU-Ultra and SUSFS move fast, and the newest commits don't always fit together. `check-release.sh` finds the newest SukiSU-Ultra and susfs commits, applies the SUSFS patch in a throwaway tree with the same recovery code the build uses, and prints the exact build command. Hunks that `patch` could only apply with fuzz are checked too: code that landed outside a function stops it, anything new is shown as a warning. It checks the newest AmneziaWG commit the same way; one that doesn't fit is left out and the build keeps the last working one:
 
 - **OK ... Build this** - new combination, patches cleanly.
 - **OK ... You're up to date** - nothing new.

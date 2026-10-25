@@ -544,6 +544,7 @@ KSU_PATCH_REL="kernel_patches/KernelSU/10_enable_susfs_for_ksu.patch"
 
 WORKTREE=""
 PATCHFILE="$(mktemp)"
+PATCHOUT="$(mktemp)"
 drop_worktree() {
     if [ -n "$WORKTREE" ]; then
         git -C "$SUKI" worktree remove --force "$WORKTREE" >/dev/null 2>&1
@@ -551,7 +552,7 @@ drop_worktree() {
         WORKTREE=""
     fi
 }
-cleanup() { drop_worktree; rm -f "$PATCHFILE"; }
+cleanup() { drop_worktree; rm -f "$PATCHFILE" "$PATCHOUT"; }
 trap cleanup EXIT
 
 # patch_test <susfs ref to take the KernelSU patch from>  -> sets VERDICT, DETAIL
@@ -567,6 +568,7 @@ patch_test() {
         DETAIL="cannot check out SukiSU ${CAND_SHA:0:8}"; return
     fi
     out="$(cd "$WORKTREE" && patch -p1 --fuzz=3 < "$PATCHFILE" 2>&1)"; rc=$?
+    printf '%s\n' "$out" > "$PATCHOUT"
     failed_files="$(printf '%s\n' "$out" \
         | awk '/^patching file /{f=$3} /FAILED/{if(f!=""){print f; f=""}}' \
         | sort -u | tr '\n' ' ')"
@@ -629,6 +631,202 @@ PY
         fi
     else
         DETAIL="could not run kernel_builder.py (python error)"
+    fi
+    if [ "$VERDICT" = "CLEAN" ] || [ "$VERDICT" = "RECOVERED" ]; then
+        fuzz_report "$PATCHOUT"
+        if [ "$FUZZ_BAD" -gt 0 ]; then
+            VERDICT="STOP"
+            DETAIL="$FUZZ_BAD hunk(s) applied with fuzz but landed outside a function (see above)"
+        fi
+    fi
+}
+
+# fuzz_report  - after a CLEAN/RECOVERED patch_test: look at every hunk that
+# `patch` applied with fuzz 2 or 3. Fuzz 3 can drop ALL context lines, and
+# then `patch` says "succeeded" while the lines land in the wrong place
+# (41083: susfs' pkg_observer.c call went into a comment above the function
+# and only the compile failed). Checks the FINAL tree (after the pipeline's
+# recovery/fixups), so a fuzzy hunk a fixup already moved shows as fine.
+# Code that ends up outside any function = certain compile failure -> STOP.
+# A new fuzzy hunk, or one in a file SukiSU changed since the last good
+# build -> WARN with where it landed. Same hunk, same file -> counted only.
+KNOWN_FUZZ_kernel_manager_pkg_observer_c="_fixup_susfs_pkg_observer_c"
+FUZZ_BAD=0; FUZZ_WARN=0
+fuzz_report() {
+    local outfile="$1" goodpatch rows f num fz age st key known changed line where n_old=0
+    FUZZ_BAD=0; FUZZ_WARN=0
+    goodpatch="$(mktemp)"
+    if [ -n "${PIN_PATCH_REF:-}" ]; then
+        git -C "$SUSFS" show "$PIN_PATCH_REF:$KSU_PATCH_REL" > "$goodpatch" 2>/dev/null || : > "$goodpatch"
+    fi
+    rows="$(python3 - "$WORKTREE" "$outfile" "$PATCHFILE" "$goodpatch" 2>/dev/null <<'PY'
+import re, sys, hashlib
+# argv: <tree> <patch output file> <candidate patch> [<last good patch>]
+# Prints one line per hunk that applied with fuzz >= 2:
+#   FUZZ|<file>|<hunk>|<fuzz>|<new or old>|<OUTSIDE|inside <func>|removal|unchecked>
+tree, outf, patchf = sys.argv[1], sys.argv[2], sys.argv[3]
+goodf = sys.argv[4] if len(sys.argv) > 4 else ""
+
+def hunks(path):
+    """{file: [ {'plus': [...], 'sig': str}, ... ]} in patch order."""
+    res, cur_file, cur = {}, None, None
+    try:
+        lines = open(path, errors="surrogateescape").read().splitlines()
+    except OSError:
+        return res
+    for ln in lines:
+        if ln.startswith("+++ "):
+            p = ln[4:].split("\t")[0].strip()
+            cur_file = p[2:] if p.startswith("b/") else p
+            res.setdefault(cur_file, [])
+            cur = None
+        elif ln.startswith("@@") and cur_file is not None:
+            cur = {"plus": [], "body": []}
+            res[cur_file].append(cur)
+        elif cur is not None and ln[:1] in ("+", "-"):
+            cur["body"].append(ln)
+            if ln[:1] == "+":
+                cur["plus"].append(ln[1:])
+    for hs in res.values():
+        for h in hs:
+            h["sig"] = hashlib.sha1("\n".join(h["body"]).encode("utf-8", "surrogateescape")).hexdigest()
+    return res
+
+cand, good = hunks(patchf), (hunks(goodf) if goodf else {})
+
+def strip_code(text):
+    """Blank out comments, strings and char literals; keep newlines."""
+    out, i, n = [], 0, len(text)
+    while i < n:
+        c = text[i]
+        if text.startswith("//", i):
+            j = text.find("\n", i); j = n if j < 0 else j
+            out.append(" " * (j - i)); i = j
+        elif text.startswith("/*", i):
+            j = text.find("*/", i + 2); j = n if j < 0 else j + 2
+            out.append("".join(ch if ch == "\n" else " " for ch in text[i:j])); i = j
+        elif c in "\"'":
+            j = i + 1
+            while j < n and text[j] != c and text[j] != "\n":
+                j += 2 if text[j] == "\\" else 1
+            j = min(j + 1, n)
+            out.append(" " * (j - i)); i = j
+        else:
+            out.append(c); i += 1
+    return "".join(out)
+
+def depth_map(text):
+    """Brace depth at the start of each line (1-based) + enclosing function name."""
+    clean = strip_code(text).split("\n")
+    depth, last_sig, func = 0, "", ""
+    depths, funcs = [0], [""]
+    for ln in clean:
+        depths.append(depth); funcs.append(func if depth > 0 else "")
+        if ln.lstrip().startswith("#"):
+            continue
+        for ch in ln:
+            if ch == "{":
+                if depth == 0:
+                    m = re.findall(r"([A-Za-z_]\w*)\s*\(", last_sig)
+                    func = m[-1] if m else "?"
+                depth += 1
+            elif ch == "}":
+                depth = max(0, depth - 1)
+        if depth == 0 and ln.strip():
+            last_sig = (last_sig + " " + ln.strip())[-300:] if not ln.strip().endswith(";") else ""
+    return depths, funcs
+
+out_lines = open(outf, errors="surrogateescape").read().splitlines()
+cur = None
+for ln in out_lines:
+    m = re.match(r"patching file (\S+)", ln)
+    if m:
+        cur = m.group(1); continue
+    m = re.match(r"Hunk #(\d+) succeeded at (\d+) with fuzz (\d+)", ln)
+    if not m or cur is None:
+        continue
+    num, at, fuzz = int(m.group(1)), int(m.group(2)), int(m.group(3))
+    if fuzz < 2:
+        continue
+    h = (cand.get(cur) or [None] * num)[num - 1] if len(cand.get(cur) or []) >= num else None
+    sigs = {x["sig"] for x in good.get(cur, [])}
+    age = "old" if h is not None and h["sig"] in sigs else "new"
+    status = "unchecked"
+    if h is not None and cur.endswith((".c", ".h")):
+        plus = [p for p in h["plus"] if p.strip() and not p.strip().startswith(("//", "/*", "*", "#"))]
+        if not [p for p in h["plus"] if p.strip()]:
+            status = "removal"  # removed lines must match exactly, even with fuzz
+        elif not plus:
+            status = "no-code"  # only includes/comments/blank lines added
+        else:
+            try:
+                text = open(f"{tree}/{cur}", errors="surrogateescape").read()
+            except OSError:
+                text = None
+            if text is not None:
+                flines = text.split("\n")
+                target = plus[0]
+                hits = [i + 1 for i, fl in enumerate(flines) if fl == target]
+                if hits:
+                    line = min(hits, key=lambda x: abs(x - at))
+                    depths, funcs = depth_map(text)
+                    indented = target[:1] in (" ", "\t")
+                    if depths[line] == 0 and indented and target.rstrip().endswith(";"):
+                        status = f"OUTSIDE:{line}"
+                    elif depths[line] > 0:
+                        status = f"inside {funcs[line] or '?'}:{line}"
+                    else:
+                        status = f"top-level:{line}"
+    print(f"FUZZ|{cur}|{num}|{fuzz}|{age}|{status}")
+PY
+)"
+    rm -f "$goodpatch"
+    [ -n "$rows" ] || return 0
+    while IFS='|' read -r _ f num fz age st; do
+        [ -n "$f" ] || continue
+        key="KNOWN_FUZZ_$(printf '%s' "$f" | tr '/.-' '___')"
+        known="${!key:-}"
+        changed=""
+        if [ -n "$PIN_SHA" ] && [ -n "$(git -C "$SUKI" log --oneline -1 "$PIN_SHA..$CAND_SHA" -- "$f" 2>/dev/null)" ]; then
+            changed=1
+        fi
+        line="${st##*:}"; [ "$line" = "$st" ] && line=""
+        case "$st" in
+            OUTSIDE:*)
+                FUZZ_BAD=$((FUZZ_BAD + 1))
+                bad "$f hunk #$num (fuzz $fz) landed OUTSIDE any function (line $line) -"
+                echo "        patch said \"succeeded\", but this code can't compile there."
+                ;;
+            *)
+                if [ "$age" = "old" ] && [ -z "$changed" ]; then
+                    n_old=$((n_old + 1)); continue
+                fi
+                if [ -n "$known" ]; then
+                    echo "  ${C}INFO${N}  $f hunk #$num (fuzz $fz): checked and placed by $known"
+                    continue
+                fi
+                if [ "$st" = "removal" ]; then
+                    echo "  ${C}INFO${N}  $f hunk #$num (fuzz $fz): only removes lines (they must match exactly) - fine."
+                    continue
+                fi
+                FUZZ_WARN=$((FUZZ_WARN + 1))
+                case "$st" in
+                    inside\ *) where="inside ${st#inside }"; where="${where%:*}() at line $line" ;;
+                    top-level:*) where="at file level, line $line" ;;
+                    no-code) where="(adds only includes/comments)" ;;
+                    *) where="(position not checked)" ;;
+                esac
+                warn "$f hunk #$num applied with fuzz $fz - $where"
+                if [ "$age" = "new" ]; then
+                    echo "        new hunk in this susfs patch - check it went to the right place."
+                else
+                    echo "        SukiSU changed this file since the last good build - check it."
+                fi
+                ;;
+        esac
+    done <<< "$rows"
+    if [ "$n_old" -gt 0 ]; then
+        echo "  ${C}INFO${N}  $n_old fuzzy hunk(s), same as in the last good build (file unchanged) - fine."
     fi
 }
 
@@ -798,6 +996,11 @@ if [ "$KSU_NEW" = 0 ] && [ "$SUSFS_NEW" = 0 ] && [ "$AWG_NEW" = 0 ]; then
     echo "  Rebuild command, if you need it (new kernel sub_level etc.):"
 else
     ok "Something new and it patches cleanly. ${B}Build this:${N}"
+    if [ "$FUZZ_WARN" -gt 0 ]; then
+        warn "$FUZZ_WARN fuzzy hunk(s) to look at (WARN lines in the patch test above)."
+        echo "        If the build fails in one of those files, that is the reason -"
+        echo "        send this output and the build log."
+    fi
     [ "$SUSFS_HELD" = 1 ] && \
         echo "        (new SukiSU, susfs stays on $(short_susfs "$SUSFS_USE") - newer susfs ${SUSFS_HEAD:0:8} doesn't fit yet)"
     [ "$AWG_NEW" = 1 ] && [ "$KSU_NEW" = 0 ] && [ "$SUSFS_NEW" = 0 ] && \
