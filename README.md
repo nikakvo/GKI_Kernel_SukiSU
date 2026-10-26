@@ -107,6 +107,7 @@ Useful `build-kernel.sh` options:
 | Option | Meaning |
 |--------|---------|
 | `--pids` | Add `CONFIG_CGROUP_PIDS` for Droidspaces (android13-5.15, used in releases) |
+| `--kpm-next` | KernelPatch 0.13.9 for KPM (pinned kptools + kpimg, used in releases). Required for SukiSU 3b58d46f and newer (new KPM bridge); the build stops without it |
 | `--ksu-commit <ref>` | Other SukiSU-Ultra commit / tag / `main` |
 | `--ksu-version-code <n>` | Version number the kernel reports - must match your manager |
 | `--susfs-commit <ref>` | Other susfs commit, `branch=hash,...`, or `latest` |

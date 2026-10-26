@@ -32,13 +32,32 @@ KPM_PATCH_URL = f"https://raw.githubusercontent.com/ShirkNeko/SukiSU_patch/{KPM_
 #   kptools -p -s 123 -i Image -k <kpimg> -o oImage
 # so with KPM_NEXT we run exactly that ourselves: kptools built from
 # SukiSU_KernelPatch_patch at a pinned commit, kpimg pinned by sha256.
-# Boot-tested on vermeer 2026-10-22 (fastboot boot, 41042 + susfs 86b5b10).
-KPM_NEXT_KPIMG_REF = "7c6289c95bdc786119b03d150236853b7b4872ca"
-KPM_NEXT_KPIMG_SHA256 = "396a20777668e85d674a23dd3945815f285332b5358be0bfc97297935e2d130b"
+# First pair (kpimg 7c6289c + kptools e60c6cf) was boot-tested on vermeer
+# 2026-10-22 and shipped in v41042..v41083.
+#
+# 2026-10-26: SukiSU 3b58d46f ("unify KernelPatch bridge") and KernelPatch
+# a3965c6 ("KPM bridge protocol") replaced the old stub hooks with a
+# kernel-to-kernel bridge. The two sides must match, there is no fallback:
+# old kpimg + new SukiSU (or the reverse) = KPM does not work. So kpimg and
+# kptools moved together to the first build with the bridge:
+#   kpimg   SukiSU_patch 1dface3 (compile time 21:46:21 Oct 25 2026, d09)
+#   kptools SukiSU_KernelPatch_patch 40ce8be (preset.h MAP_MAX_SIZE 0x1000 -
+#           the old kptools must not be used with this kpimg)
+# KPM_NEXT_BRIDGE is the bridge both sides were built with; the build checks
+# SukiSU's kernel/extension/kpm/bridge.h against it before compiling.
+KPM_NEXT_KPIMG_REF = "1dface3879613a62057f2ef441d4a6a3ce214c16"
+KPM_NEXT_KPIMG_SHA256 = "67c6dd4637b673b7e230d0fa36bfc2d895a2467cb7137107213a96f2b9781c91"
 KPM_NEXT_KPIMG_URL = f"https://raw.githubusercontent.com/SukiSU-Ultra/SukiSU_patch/{KPM_NEXT_KPIMG_REF}/kpm/kpimg"
 KPM_NEXT_TOOLS_REPO = "https://github.com/SukiSU-Ultra/SukiSU_KernelPatch_patch.git"
-KPM_NEXT_TOOLS_REF = "e60c6cfd5cea87cccf9adb7e4d4ba583702d443c"
+KPM_NEXT_TOOLS_REF = "40ce8bea970e25fac9926a220730cf5a2331e3d9"
 KPM_NEXT_VERSION = "d09"   # KernelPatch 0.13.9: kptools -v and the kpimg must both say this
+KPM_NEXT_BRIDGE = {
+    "SUKISU_KPM_SUPERCALL_MAGIC": "0x53554b504d000002UL",
+    "SUKISU_KPM_SUPERCALL_MAGIC2": "0x4b504d4252494447UL",
+    "SUKISU_KPM_SUPERCALL_MAGIC3": "0x53554b494e544552UL",
+    "SUKISU_KPM_ABI_VERSION": "1",
+}
+KPM_BRIDGE_H = "KernelSU/kernel/extension/kpm/bridge.h"   # relative to work_dir
 
 # AmneziaWG (WireGuard fork with DPI obfuscation), built in (=y) next to the
 # stock WireGuard. The commit is pinned in config.py (DEFAULT_AMNEZIAWG_REF)
@@ -5604,6 +5623,51 @@ CONFIG_CIFS_XATTR=y
                 f"{KPM_NEXT_VERSION}. Stopping.")
         return kptools
 
+    def _check_kpm_bridge(self):
+        """SukiSU 3b58d46f+ reaches KernelPatch through a kernel-to-kernel bridge
+        (kernel/extension/kpm/bridge.h) and has no fallback to the old stub
+        hooks. Checked right after SukiSU is in place, so a wrong mix stops
+        before the long compile instead of shipping a kernel whose KPM is dead:
+          bridge.h + default patcher (0.13.0, no bridge)   -> stop, use --kpm-next
+          bridge.h + --kpm-next, bridge != KPM_NEXT_BRIDGE -> stop, pins must move
+          no bridge.h + --kpm-next (kpimg has only the bridge) -> stop
+          no bridge.h + default patcher                    -> old way, fine"""
+        if not self.config.use_kpm or self.config.kernel_version == "6.6":
+            return
+        bridge = self.work_dir / KPM_BRIDGE_H
+        nxt = self._kpm_next()
+        if not bridge.exists():
+            if nxt:
+                self._mark("kpm_bridge", "failed", "SukiSU has no bridge.h, --kpm-next kpimg needs it")
+                raise RuntimeError(
+                    f"KPM: the --kpm-next KernelPatch (kpimg SukiSU_patch {KPM_NEXT_KPIMG_REF[:7]}) "
+                    f"only speaks the new KPM bridge, but this SukiSU has no "
+                    f"kernel/extension/kpm/bridge.h (older than 3b58d46f). KPM would not "
+                    f"work. Build this SukiSU without --kpm-next. Stopping.")
+            self._mark("kpm_bridge", "skipped", "older SukiSU, no bridge - default patcher")
+            return
+        if not nxt:
+            self._mark("kpm_bridge", "failed", "SukiSU needs the bridge, default patcher has none")
+            raise RuntimeError(
+                f"KPM: this SukiSU (3b58d46f or newer) talks to KernelPatch over the new "
+                f"KPM bridge. The default patcher (SukiSU_patch {KPM_PATCH_REF[:7]}, "
+                f"KernelPatch 0.13.0) does not have it, so KPM would not work. "
+                f"Build with --kpm-next. Stopping.")
+        text = bridge.read_text(errors="replace")
+        have = dict(re.findall(r"^#define\s+(SUKISU_KPM_\w+)\s+(\S+)", text, re.M))
+        diff = [f"{k}: SukiSU {have.get(k, 'missing')}, pinned {v}"
+                for k, v in KPM_NEXT_BRIDGE.items() if have.get(k) != v]
+        if diff:
+            self._mark("kpm_bridge", "failed", "; ".join(diff))
+            raise RuntimeError(
+                "KPM: SukiSU's KPM bridge does not match the pinned --kpm-next "
+                "KernelPatch (" + "; ".join(diff) + "). KPM_NEXT_* must move to a "
+                "KernelPatch built for this bridge. Stopping.")
+        logger.info(f"KPM: SukiSU bridge matches KernelPatch kpimg {KPM_NEXT_KPIMG_REF[:7]} "
+                    f"(ABI {KPM_NEXT_BRIDGE['SUKISU_KPM_ABI_VERSION']})")
+        self._mark("kpm_bridge", "applied",
+                   f"bridge ABI {KPM_NEXT_BRIDGE['SUKISU_KPM_ABI_VERSION']} = kpimg {KPM_NEXT_KPIMG_REF[:12]}")
+
     def _patch_kpm_image_next(self, image_dir: Path):
         """KPM_NEXT path of patch_kpm_image(): same result as SukiSU_patch's
         patch_linux, done with a pinned kptools + pinned kpimg (see the
@@ -5824,6 +5888,7 @@ CONFIG_CIFS_XATTR=y
             self.add_kernel_supatch()
             self.add_kernelsu()
             self._pin_ksu_version_code()
+            self._check_kpm_bridge()
             self.add_bbg()
             self.apply_susfs_patches()
             self.apply_susfs_kernelsu_patch()

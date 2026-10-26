@@ -410,50 +410,60 @@ if [ -n "$SUSFS_PIN" ] && [ "$SUSFS_HEAD" != "$SUSFS_PIN_K" ]; then
 fi
 
 # ---- 2b. KPM patcher (SukiSU_patch kpm/) - information only -----------------
-# The build uses ONE pinned version of SukiSU_patch's kpm/patch_linux
-# (KPM_PATCH_REF in kernel_builder.py). This only tells you when upstream has
-# published something newer, so it can be boot-tested. It never changes the
-# verdict below and never changes the pin.
+# Two pinned KernelPatch versions, both in kernel_builder.py:
+#   KPM_PATCH_REF       kpm/patch_linux, default build (KernelPatch 0.13.0)
+#   KPM_NEXT_KPIMG_REF  kpm/kpimg used by --kpm-next (+ kptools KPM_NEXT_TOOLS_REF)
+# This only tells you when upstream has published something newer than the
+# --kpm-next pin, so it can be boot-tested. It never moves a pin.
 # Patcher versions known to make a kernel that doesn't boot on our phone:
-KPM_PATCH_BROKEN="7c6289c"   # 2026-10-18 "更新KPM": kpimg version 0, bootloop at POCO logo
+KPM_PATCH_BROKEN="7c6289c"   # 2026-10-18 "更新KPM": its patch_linux has an empty kpimg - bootloop at POCO logo
 kpm_patcher_report() {
-    local pin pin_full head newer c short known
+    local pin pin_full next next_full head newer c short line
     pin="$(sed -n 's/^KPM_PATCH_REF = "\([0-9a-f]*\)".*/\1/p' "$BUILDER_DIR/kernel_builder.py" 2>/dev/null | head -n 1)"
+    next="$(sed -n 's/^KPM_NEXT_KPIMG_REF = "\([0-9a-f]*\)".*/\1/p' "$BUILDER_DIR/kernel_builder.py" 2>/dev/null | head -n 1)"
     hdr "KPM patcher (SukiSU_patch kpm/)"
     if [ -z "$SKPATCH" ] || [ -z "$pin" ]; then
         warn "Could not check (no SukiSU_patch copy or no KPM_PATCH_REF in kernel_builder.py)."
         return 0
     fi
     pin_full="$(sha_of "$SKPATCH" "$pin")"
+    next_full=""
+    [ -n "$next" ] && next_full="$(sha_of "$SKPATCH" "$next")"
     head="$(git -C "$SKPATCH" log -1 --format=%H origin/main -- kpm/ 2>/dev/null)"
     if [ -z "$pin_full" ] || [ -z "$head" ]; then
         warn "Could not find the pinned patcher ${pin:0:8} or kpm/ history in SukiSU_patch."
         return 0
     fi
-    echo "  pinned  $(git -C "$SKPATCH" log -1 --date=short --format='%h   %ad   %s' "$pin_full")"
-    if [ "$head" = "$pin_full" ]; then
-        ok "No newer KPM patcher upstream."
-        return 0
-    fi
     newer=0
     while read -r c; do
         [ -n "$c" ] || continue
-        short="${c:0:7}"; known=""
-        case " $KPM_PATCH_BROKEN " in *" $short "*) known=1 ;; esac
-        if [ -n "$known" ]; then
-            echo "  newer   $(git -C "$SKPATCH" log -1 --date=short --format='%h   %ad   %s' "$c")   ${D:-}(known broken - bootloop)${N}"
+        short="${c:0:7}"
+        line="$(git -C "$SKPATCH" log -1 --date=short --format='%h   %ad   %s' "$c")"
+        if [ "$c" = "$next_full" ]; then
+            echo "  ${G}next${N}    $line   (--kpm-next pin)"
+        elif [ -n "$next_full" ] && git -C "$SKPATCH" merge-base --is-ancestor "$c" "$next_full" 2>/dev/null; then
+            case " $KPM_PATCH_BROKEN " in
+                *" $short "*) echo "  older   $line   ${D:-}(known broken - bootloop)${N}" ;;
+                *)            echo "  older   $line   ${D:-}(older than the --kpm-next pin)${N}" ;;
+            esac
         else
-            echo "  ${B}NEW${N}     $(git -C "$SKPATCH" log -1 --date=short --format='%h   %ad   %s' "$c")"
-            newer=$((newer + 1))
+            case " $KPM_PATCH_BROKEN " in
+                *" $short "*) echo "  newer   $line   ${D:-}(known broken - bootloop)${N}" ;;
+                *) echo "  ${B}NEW${N}     $line"; newer=$((newer + 1)) ;;
+            esac
         fi
     done < <(git -C "$SKPATCH" log --format=%H "$pin_full..origin/main" -- kpm/ 2>/dev/null)
+    echo "  pinned  $(git -C "$SKPATCH" log -1 --date=short --format='%h   %ad   %s' "$pin_full")   (default build)"
+    if [ -n "$next" ] && [ -z "$next_full" ]; then
+        warn "The --kpm-next pin ${next:0:8} is not in SukiSU_patch history."
+    fi
     if [ "$newer" -gt 0 ]; then
-        warn "A new KPM patcher was published. The build still uses ${pin:0:7}."
+        warn "A KPM patcher newer than the --kpm-next pin was published."
         echo "        Send this output for a look - it needs a test build and"
         echo "        'fastboot boot boot.img' before it can replace the pin."
         echo "        https://github.com/ShirkNeko/SukiSU_patch/commits/main/kpm"
     else
-        ok "Only known-broken patcher versions are newer - staying on ${pin:0:7}."
+        ok "Nothing newer than the --kpm-next pin ${next:0:7}."
     fi
 }
 kpm_patcher_report
@@ -964,6 +974,49 @@ fi
 SUSFS_NEW=0
 [ "$SUSFS_USE" != "$SUSFS_PIN_FULL" ] && SUSFS_NEW=1
 
+# ---- KPM bridge (SukiSU 3b58d46f+) -------------------------------------------
+# Newer SukiSU talks to KernelPatch over a kernel-to-kernel bridge
+# (kernel/extension/kpm/bridge.h). Only the --kpm-next KernelPatch has it, and
+# both sides must use the same protocol (KPM_NEXT_BRIDGE in kernel_builder.py).
+# The build checks the same thing before compiling; this just says it early.
+KPM_ONLY_NEXT=0
+kpm_bridge_report() {
+    local hdrfile out
+    hdrfile="$(git -C "$SUKI" show "$CAND_SHA:kernel/extension/kpm/bridge.h" 2>/dev/null)"
+    [ -n "$hdrfile" ] || return 0
+    hdr "KPM bridge (SukiSU kernel/extension/kpm/bridge.h)"
+    out="$(BRIDGE_H="$hdrfile" python3 - "$BUILDER_DIR/kernel_builder.py" <<'PYEOF'
+import ast, os, re, sys
+want = None
+for node in ast.parse(open(sys.argv[1]).read()).body:
+    if isinstance(node, ast.Assign) and any(getattr(t, "id", "") == "KPM_NEXT_BRIDGE" for t in node.targets):
+        want = ast.literal_eval(node.value)
+if not want:
+    print("NOPIN"); sys.exit(0)
+have = dict(re.findall(r"^#define\s+(SUKISU_KPM_\w+)\s+(\S+)", os.environ["BRIDGE_H"], re.M))
+bad = [f"{k}: SukiSU {have.get(k, 'missing')}, KernelPatch pin {v}" for k, v in want.items() if have.get(k) != v]
+print("OK" if not bad else "DIFF " + "; ".join(bad))
+PYEOF
+)"
+    case "$out" in
+        OK)
+            ok "SukiSU ${CAND_SHA:0:8} uses the KPM bridge - matches the --kpm-next KernelPatch pin."
+            echo "        The default KPM patcher (0.13.0) has no bridge, so every build"
+            echo "        command below has --kpm-next."
+            KPM_ONLY_NEXT=1 ;;
+        NOPIN)
+            bad "SukiSU ${CAND_SHA:0:8} needs the KPM bridge, but kernel_builder.py has no KPM_NEXT_BRIDGE."
+            echo "        This kernel_builder.py is too old for this SukiSU."
+            VERDICT="STOP" ;;
+        *)
+            bad "SukiSU changed the KPM bridge - it no longer matches the --kpm-next KernelPatch pin."
+            echo "        ${out#DIFF }"
+            echo "        KPM_NEXT_* in kernel_builder.py must move to a matching KernelPatch first."
+            VERDICT="STOP" ;;
+    esac
+}
+kpm_bridge_report
+
 # ---- verdict + command -------------------------------------------------------
 hdr "What to do"
 
@@ -1015,10 +1068,12 @@ if [ "$CAND_CODE" = "?" ]; then
     CAND_CODE="<manager version>"
 fi
 
+KPM_ARG=""
+[ "$KPM_ONLY_NEXT" = 1 ] && KPM_ARG=" --kpm-next"
 echo
 echo "  ${C}./build-kernel.sh ${EXTRA}--ksu-commit $CAND_SHA \\"
 echo "    --susfs-commit $SUSFS_USE \\"
-echo "    --ksu-version-code $CAND_CODE${AWG_ARG}${N}"
+echo "    --ksu-version-code $CAND_CODE${KPM_ARG}${AWG_ARG}${N}"
 echo
 echo "  $MENU"
 if [ "$BRANCH" = "gki-android13-5.15" ]; then
@@ -1027,13 +1082,15 @@ if [ "$BRANCH" = "gki-android13-5.15" ]; then
     echo "  via the net_prio slot swap). Test builds only, files get a \"-pids\" marker:"
     echo "  ${C}./build-kernel.sh --ksu-commit $CAND_SHA \\"
     echo "    --susfs-commit $SUSFS_USE \\"
-    echo "    --ksu-version-code $CAND_CODE --pids${AWG_ARG}${N}"
-    echo
-    echo "  ${Y}KPM next${N} - same --pids build with KernelPatch 0.13.9 for KPM"
-    echo "  (pinned kptools + kpimg, see KPM_NEXT_* in kernel_builder.py):"
-    echo "  ${C}./build-kernel.sh --ksu-commit $CAND_SHA \\"
-    echo "    --susfs-commit $SUSFS_USE \\"
-    echo "    --ksu-version-code $CAND_CODE --pids --kpm-next${AWG_ARG}${N}"
+    echo "    --ksu-version-code $CAND_CODE --pids${KPM_ARG}${AWG_ARG}${N}"
+    if [ "$KPM_ONLY_NEXT" = 0 ]; then
+        echo
+        echo "  ${Y}KPM next${N} - same --pids build with KernelPatch 0.13.9 for KPM"
+        echo "  (pinned kptools + kpimg, see KPM_NEXT_* in kernel_builder.py):"
+        echo "  ${C}./build-kernel.sh --ksu-commit $CAND_SHA \\"
+        echo "    --susfs-commit $SUSFS_USE \\"
+        echo "    --ksu-version-code $CAND_CODE --pids --kpm-next${AWG_ARG}${N}"
+    fi
 fi
 
 if [ "$KSU_NEW" = 1 ] || [ "$SUSFS_NEW" = 1 ] || [ "$AWG_NEW" = 1 ]; then
@@ -1050,6 +1107,11 @@ if [ "$KSU_NEW" = 1 ] || [ "$SUSFS_NEW" = 1 ] || [ "$AWG_NEW" = 1 ]; then
     echo "        image_ikconfig             -> all expected present"
     if [ "$BRANCH" = "gki-android13-5.15" ] && [ -n "$AWG_USE" ]; then
         echo "        amneziawg                  -> applied (AmneziaWG $(awg_version_of "$AWG_USE") @ ${AWG_USE:0:12})"
+    fi
+    if [ "$KPM_ONLY_NEXT" = 1 ]; then
+        echo "        kpm_bridge                 -> applied"
+        echo "        kpm_image_patch            -> applied (KPM_NEXT kptools $(sed -n 's/^KPM_NEXT_TOOLS_REF = "\([0-9a-f]\{12\}\).*/\1/p' "$BUILDER_DIR/kernel_builder.py") + kpimg $(sed -n 's/^KPM_NEXT_KPIMG_REF = "\([0-9a-f]\{12\}\).*/\1/p' "$BUILDER_DIR/kernel_builder.py") (d09))"
+        echo "      After boot: su -c '/data/adb/ksud kpm version' must print a number, not an error."
     fi
     echo "   3. After it boots: manager shows ${CAND_CODE}-${MAIN_UAPI} for both, check-features.sh is clean."
     echo "   4. Run ${B}./check-release.sh${N} again - it will ask if this build works."
