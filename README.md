@@ -17,6 +17,8 @@ Download the latest build from **[Releases](https://github.com/nikakvo/GKI_Kerne
 | `android12-5.10`, `android14-6.1`, `android15-6.6` | The scripts can build them, **untested** on a device. |
 | Non-GKI devices | Not supported. |
 
+**Personal build.** I build this kernel for my own phone on clean Xiaomi.eu HyperOS and share it as is, **without support**. Other ROMs (including CN/Global), modified systems and other module setups are not tested. If something doesn't work for you, flash your stock `boot.img` back. Please don't open issues or report problems from other setups.
+
 **Always keep a working `boot.img` backup before flashing.**
 
 ---
