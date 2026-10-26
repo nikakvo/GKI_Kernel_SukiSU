@@ -14,7 +14,9 @@ from config import (BuildConfig, KSU_REPO_CONFIG, SUSFS_REPO_CONFIG, SUKISU_PATC
                    ANYKERNEL_CONFIG, KERNEL_PATCHES_CONFIG, BBG_CONFIG, TOOLCHAIN_CONFIG,
                    LEGACY_FIXES, OP8E_PATCH_URL)
 
-# KPM image patcher (SukiSU_patch kpm/patch_linux). Pinned to one commit and
+# LEGACY KPM image patcher (SukiSU_patch kpm/patch_linux, KernelPatch 0.13.0),
+# only used with KPM_LEGACY=1 (./build-kernel.sh --kpm-legacy) and only valid
+# for SukiSU 41083 and older (no KPM bridge). Pinned to one commit and
 # checked by sha256: it used to be fetched from `main` on every build, and the
 # 2026-10-18 update (7c6289c, new kpimg + patch_linux) produced a kernel that
 # bootloops at the vendor logo. 547ae94 (2026-03-15) is the patcher every
@@ -24,7 +26,9 @@ KPM_PATCH_REF = "547ae94bcaec53d030398f857950c64662043a5d"
 KPM_PATCH_SHA256 = "1bd00563e9d8fbbd11a16c0c1c59c5add406e6c5c92557def50f93d6f0aebe2d"
 KPM_PATCH_URL = f"https://raw.githubusercontent.com/ShirkNeko/SukiSU_patch/{KPM_PATCH_REF}/kpm/patch_linux"
 
-# Opt-in newer KernelPatch (KPM_NEXT=1, or ./build-kernel.sh --kpm-next).
+# DEFAULT KernelPatch (0.13.9) since 2026-10-26 (was opt-in --kpm-next).
+# KPM_LEGACY=1 / --kpm-legacy switches back to the 547ae94 patcher above;
+# KPM_NEXT=0 does the same (old name, still read).
 # SukiSU_patch 7c6289c ships a working kpm/kpimg (KernelPatch 0.13.9), but its
 # kpm/patch_linux was built with an empty kpimg embedded (SukiSU_patch#13: a
 # configure-time check in SukiSU_KernelPatch_patch patch/CMakeLists.txt always
@@ -5588,7 +5592,12 @@ CONFIG_CIFS_XATTR=y
 
     @staticmethod
     def _kpm_next() -> bool:
-        return os.environ.get("KPM_NEXT", "").strip().lower() in ("1", "yes", "true")
+        """True (pinned kptools + kpimg, KernelPatch 0.13.9) unless the build
+        asks for the legacy 547ae94 patcher: KPM_LEGACY=1, or KPM_NEXT=0."""
+        off = ("0", "no", "false")
+        if os.environ.get("KPM_LEGACY", "").strip().lower() in ("1", "yes", "true"):
+            return False
+        return os.environ.get("KPM_NEXT", "1").strip().lower() not in off
 
     def _build_kpm_next_kptools(self) -> Path:
         """kptools (x86-64 host) from SukiSU_KernelPatch_patch at
@@ -5628,31 +5637,31 @@ CONFIG_CIFS_XATTR=y
         (kernel/extension/kpm/bridge.h) and has no fallback to the old stub
         hooks. Checked right after SukiSU is in place, so a wrong mix stops
         before the long compile instead of shipping a kernel whose KPM is dead:
-          bridge.h + default patcher (0.13.0, no bridge)   -> stop, use --kpm-next
-          bridge.h + --kpm-next, bridge != KPM_NEXT_BRIDGE -> stop, pins must move
-          no bridge.h + --kpm-next (kpimg has only the bridge) -> stop
-          no bridge.h + default patcher                    -> old way, fine"""
+          bridge.h + --kpm-legacy (0.13.0, no bridge)        -> stop
+          bridge.h + default, bridge != KPM_NEXT_BRIDGE      -> stop, pins must move
+          no bridge.h + default (kpimg has only the bridge)  -> stop, use --kpm-legacy
+          no bridge.h + --kpm-legacy                         -> old way, fine"""
         if not self.config.use_kpm or self.config.kernel_version == "6.6":
             return
         bridge = self.work_dir / KPM_BRIDGE_H
         nxt = self._kpm_next()
         if not bridge.exists():
             if nxt:
-                self._mark("kpm_bridge", "failed", "SukiSU has no bridge.h, --kpm-next kpimg needs it")
+                self._mark("kpm_bridge", "failed", "SukiSU has no bridge.h, the pinned kpimg needs it (use --kpm-legacy)")
                 raise RuntimeError(
-                    f"KPM: the --kpm-next KernelPatch (kpimg SukiSU_patch {KPM_NEXT_KPIMG_REF[:7]}) "
+                    f"KPM: the pinned KernelPatch (kpimg SukiSU_patch {KPM_NEXT_KPIMG_REF[:7]}) "
                     f"only speaks the new KPM bridge, but this SukiSU has no "
                     f"kernel/extension/kpm/bridge.h (older than 3b58d46f). KPM would not "
-                    f"work. Build this SukiSU without --kpm-next. Stopping.")
-            self._mark("kpm_bridge", "skipped", "older SukiSU, no bridge - default patcher")
+                    f"work. Build this SukiSU with --kpm-legacy. Stopping.")
+            self._mark("kpm_bridge", "skipped", "older SukiSU, no bridge - legacy patcher (--kpm-legacy)")
             return
         if not nxt:
-            self._mark("kpm_bridge", "failed", "SukiSU needs the bridge, default patcher has none")
+            self._mark("kpm_bridge", "failed", "SukiSU needs the bridge, legacy patcher has none")
             raise RuntimeError(
                 f"KPM: this SukiSU (3b58d46f or newer) talks to KernelPatch over the new "
-                f"KPM bridge. The default patcher (SukiSU_patch {KPM_PATCH_REF[:7]}, "
+                f"KPM bridge. The legacy patcher (SukiSU_patch {KPM_PATCH_REF[:7]}, "
                 f"KernelPatch 0.13.0) does not have it, so KPM would not work. "
-                f"Build with --kpm-next. Stopping.")
+                f"Build without --kpm-legacy. Stopping.")
         text = bridge.read_text(errors="replace")
         have = dict(re.findall(r"^#define\s+(SUKISU_KPM_\w+)\s+(\S+)", text, re.M))
         diff = [f"{k}: SukiSU {have.get(k, 'missing')}, pinned {v}"
@@ -5660,7 +5669,7 @@ CONFIG_CIFS_XATTR=y
         if diff:
             self._mark("kpm_bridge", "failed", "; ".join(diff))
             raise RuntimeError(
-                "KPM: SukiSU's KPM bridge does not match the pinned --kpm-next "
+                "KPM: SukiSU's KPM bridge does not match the pinned "
                 "KernelPatch (" + "; ".join(diff) + "). KPM_NEXT_* must move to a "
                 "KernelPatch built for this bridge. Stopping.")
         logger.info(f"KPM: SukiSU bridge matches KernelPatch kpimg {KPM_NEXT_KPIMG_REF[:7]} "

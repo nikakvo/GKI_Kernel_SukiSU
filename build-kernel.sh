@@ -136,10 +136,15 @@ while [ "$#" -gt 0 ]; do
             shift
             ;;
         --kpm-next)
-            # Newer KernelPatch (0.13.9) for KPM: pinned kptools + kpimg
-            # instead of SukiSU_patch's patch_linux (see KPM_NEXT_* at the
-            # top of kernel_builder.py). Default stays the 547ae94 patcher.
-            export KPM_NEXT=1
+            # KernelPatch 0.13.9 (pinned kptools + kpimg) is the default
+            # since 2026-10-26. Kept so old commands still work.
+            shift
+            ;;
+        --kpm-legacy)
+            # Old KPM patcher (SukiSU_patch 547ae94 patch_linux, KernelPatch
+            # 0.13.0). Only for SukiSU 41083 and older (no KPM bridge); the
+            # build stops if this SukiSU needs the bridge.
+            export KPM_LEGACY=1
             shift
             ;;
         --amneziawg-commit)
@@ -170,7 +175,7 @@ while [ "$#" -gt 0 ]; do
             ;;
         *)
             echo "Unknown argument: $1"
-            echo "Usage: $0 [--ksu-commit <tag|commit|branch>] [--susfs-commit <commit|branch=commit,...|latest>] [--ksu-version-code <N>] [--no-hide-stuff] [--no-ath9k] [--no-amneziawg] [--amneziawg-commit <sha>] [--pids] [--kpm-next]"
+            echo "Usage: $0 [--ksu-commit <tag|commit|branch>] [--susfs-commit <commit|branch=commit,...|latest>] [--ksu-version-code <N>] [--no-hide-stuff] [--no-ath9k] [--no-amneziawg] [--amneziawg-commit <sha>] [--pids] [--kpm-legacy]"
             echo "Without pin flags, the known-good pins from .github/workflows/scripts/config.py are used."
             exit 1
             ;;
@@ -499,7 +504,11 @@ echo "  Sublevel: $SUB_LEVEL"
 echo "  OS Patch: $OS_PATCH"
 [ -n "$KERNEL_TAG" ] && echo "  Kernel Tag: $KERNEL_TAG"
 [ -n "$DROIDSPACES_PIDS" ] && echo "  Droidspaces pids: ON (experimental test build, files get -pids)"
-[ -n "$KPM_NEXT" ] && echo "  KPM: KernelPatch 0.13.9 (--kpm-next)"
+if [ -n "$KPM_LEGACY" ]; then
+    echo "  KPM: KernelPatch 0.13.0 (--kpm-legacy, SukiSU 41083 and older only)"
+else
+    echo "  KPM: KernelPatch 0.13.9"
+fi
 if [ -n "$AMNEZIAWG" ]; then
     echo "  AmneziaWG: ON (built in)${AMNEZIAWG_COMMIT:+, commit $AMNEZIAWG_COMMIT}"
 else

@@ -196,7 +196,7 @@ else
 fi
 
 # KPM. The KernelPatch version comes from ksud (needs root):
-#   3328 = 0.13.0 (default patcher), 3337 = 0.13.9 (--kpm-next builds).
+#   3328 = 0.13.0 (older builds, --kpm-legacy), 3337 = 0.13.9 (v41042 and newer).
 KSUD=/data/adb/ksud
 KP_VER=; KP_DOT=; KP_RAW=
 if cfg_is CONFIG_KPM y && [ -x "$KSUD" ] && [ "$(id -u)" = 0 ]; then
@@ -231,7 +231,7 @@ fi
 if cfg_is CONFIG_KPM y; then
     if [ -n "$KP_VER" ] && [ "$KP_VER" -lt 3337 ] 2>/dev/null; then
         row off "KPM: BTF for KPMs" \
-            "KernelPatch $KP_DOT - BTF support for KPMs starts with 0.13.9 (--kpm-next builds)"
+            "KernelPatch $KP_DOT - BTF support for KPMs starts with 0.13.9"
     elif [ -r /sys/kernel/btf/vmlinux ]; then
         row ok "KPM: BTF for KPMs" "/sys/kernel/btf/vmlinux present"
     elif cfg_is CONFIG_DEBUG_INFO_BTF y; then
