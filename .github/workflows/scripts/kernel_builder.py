@@ -26,7 +26,8 @@ KPM_PATCH_REF = "547ae94bcaec53d030398f857950c64662043a5d"
 KPM_PATCH_SHA256 = "1bd00563e9d8fbbd11a16c0c1c59c5add406e6c5c92557def50f93d6f0aebe2d"
 KPM_PATCH_URL = f"https://raw.githubusercontent.com/ShirkNeko/SukiSU_patch/{KPM_PATCH_REF}/kpm/patch_linux"
 
-# DEFAULT KernelPatch (0.13.9) since 2026-10-26 (was opt-in --kpm-next).
+# DEFAULT KernelPatch since 2026-10-26 (was opt-in --kpm-next): 0.13.9 until
+# 2026-10-27, 0.14.0 since 2026-10-28 (see below).
 # KPM_LEGACY=1 / --kpm-legacy switches back to the 547ae94 patcher above;
 # KPM_NEXT=0 does the same (old name, still read).
 # SukiSU_patch 7c6289c ships a working kpm/kpimg (KernelPatch 0.13.9), but its
@@ -49,17 +50,30 @@ KPM_PATCH_URL = f"https://raw.githubusercontent.com/ShirkNeko/SukiSU_patch/{KPM_
 #           the old kptools must not be used with this kpimg)
 # KPM_NEXT_BRIDGE is the bridge both sides were built with; the build checks
 # SukiSU's kernel/extension/kpm/bridge.h against it before compiling.
-KPM_NEXT_KPIMG_REF = "1dface3879613a62057f2ef441d4a6a3ce214c16"
-KPM_NEXT_KPIMG_SHA256 = "67c6dd4637b673b7e230d0fa36bfc2d895a2467cb7137107213a96f2b9781c91"
+#
+# 2026-10-28: SukiSU 96ceb4a4 ("kpm: add post-fs-data event loading") moved
+# the bridge to ABI 2 (new optional op 8, event-aware load) and KernelPatch
+# d958d25 did the same on its side (KernelPatch 0.14.0, version e00). The
+# ABI number must match exactly (KP answers EPROTO otherwise), so SukiSU
+# 41097+ needs this pair and SukiSU 41085..41094 (ABI 1) the previous one:
+#   kpimg   SukiSU_patch eec4578 (compile time 20:07:48 Oct 27 2026, e00) =
+#           KernelPatch 1c5b608 (the revert of the hook registry 87b0142,
+#           so the same code as d958d25; 0ec37c5 is the reverted build)
+#   kptools SukiSU_KernelPatch_patch 1c5b608 (tools/ unchanged since
+#           40ce8be, but kptools -v must say e00)
+# Previous pair (v41085..v41094, ABI 1, 0.13.9 / d09): kpimg 1dface3
+# (sha256 67c6dd46...), kptools 40ce8be.
+KPM_NEXT_KPIMG_REF = "eec45788c9a115e5498040298133336d6b6071dd"
+KPM_NEXT_KPIMG_SHA256 = "14fc6564fa092afe4a2293268cd061da64a20f61dc91396a404daf13d053f5ca"
 KPM_NEXT_KPIMG_URL = f"https://raw.githubusercontent.com/SukiSU-Ultra/SukiSU_patch/{KPM_NEXT_KPIMG_REF}/kpm/kpimg"
 KPM_NEXT_TOOLS_REPO = "https://github.com/SukiSU-Ultra/SukiSU_KernelPatch_patch.git"
-KPM_NEXT_TOOLS_REF = "40ce8bea970e25fac9926a220730cf5a2331e3d9"
-KPM_NEXT_VERSION = "d09"   # KernelPatch 0.13.9: kptools -v and the kpimg must both say this
+KPM_NEXT_TOOLS_REF = "1c5b608916357ac86a94cc736e235db1fac4a29d"
+KPM_NEXT_VERSION = "e00"   # KernelPatch 0.14.0: kptools -v and the kpimg must both say this
 KPM_NEXT_BRIDGE = {
     "SUKISU_KPM_SUPERCALL_MAGIC": "0x53554b504d000002UL",
     "SUKISU_KPM_SUPERCALL_MAGIC2": "0x4b504d4252494447UL",
     "SUKISU_KPM_SUPERCALL_MAGIC3": "0x53554b494e544552UL",
-    "SUKISU_KPM_ABI_VERSION": "1",
+    "SUKISU_KPM_ABI_VERSION": "2",
 }
 KPM_BRIDGE_H = "KernelSU/kernel/extension/kpm/bridge.h"   # relative to work_dir
 
@@ -3533,6 +3547,16 @@ CONFIG_CIFS_XATTR=y
         '    susfs_parse_priority_app_strings();\n'
         '\n'
     )
+    # susfs f3ceb5d (2026-10-27) moved the call into the task_work callback,
+    # right after track_throne(false) - the renew must run after the scan.
+    # On SukiSU that hunk applies with an offset only, no fuzz.
+    _PKG_OBS_TW_FUNC = 'static void ksu_track_throne_tw_func(struct callback_head *cb)\n{\n'
+    _PKG_OBS_TW_PRIORITY = (
+        '    track_throne(false);\n'
+        '    // Renew the getpriority uid bitmap filter\n'
+        '    susfs_parse_priority_app_strings();\n'
+        '}\n'
+    )
 
     def _fixup_susfs_pkg_observer_c(self, ksu_dir) -> bool:
         # susfs 0b5f967 (2026-10, priority UID filter) adds a call to
@@ -3557,9 +3581,21 @@ CONFIG_CIFS_XATTR=y
         if call not in text:
             return True
         top, block = self._PKG_OBS_FUNC_TOP, self._PKG_OBS_PRIORITY_BLOCK
-        if text.count(call) != 1 or text.count(block) != 1 or text.count(top) != 1:
+        if text.count(call) != 1 or '#include <linux/susfs.h>' not in text:
             return False
-        if '#include <linux/susfs.h>' not in text:
+        # susfs f3ceb5d+: the call ends ksu_track_throne_tw_func(). Accept it
+        # only there (first closing brace after the function head).
+        tw_head, tw_tail = self._PKG_OBS_TW_FUNC, self._PKG_OBS_TW_PRIORITY
+        if text.count(tw_tail) == 1:
+            if text.count(tw_head) != 1:
+                return False
+            start = text.index(tw_head)
+            end = text.find('\n}\n', start)
+            if end < 0 or text.index(tw_tail) + len(tw_tail) != end + 3:
+                return False
+            return True  # applied in the right place (newer susfs layout)
+        # susfs 0b5f967: the call opens ksu_defer_track_throne().
+        if text.count(block) != 1 or text.count(top) != 1:
             return False
         if top + block in text:
             return True  # applied in the right place
@@ -5592,7 +5628,7 @@ CONFIG_CIFS_XATTR=y
 
     @staticmethod
     def _kpm_next() -> bool:
-        """True (pinned kptools + kpimg, KernelPatch 0.13.9) unless the build
+        """True (pinned kptools + kpimg, KernelPatch KPM_NEXT_VERSION) unless the build
         asks for the legacy 547ae94 patcher: KPM_LEGACY=1, or KPM_NEXT=0."""
         off = ("0", "no", "false")
         if os.environ.get("KPM_LEGACY", "").strip().lower() in ("1", "yes", "true"):

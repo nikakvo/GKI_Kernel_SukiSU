@@ -196,7 +196,8 @@ else
 fi
 
 # KPM. The KernelPatch version comes from ksud (needs root):
-#   3328 = 0.13.0 (older builds, --kpm-legacy), 3337 = 0.13.9 (v41042 and newer).
+#   3328 = 0.13.0 (older builds, --kpm-legacy), 3337 = 0.13.9 (v41042..v41094),
+#   3584 = 0.14.0 (v41097 and newer).
 KSUD=/data/adb/ksud
 KP_VER=; KP_DOT=; KP_RAW=
 if cfg_is CONFIG_KPM y && [ -x "$KSUD" ] && [ "$(id -u)" = 0 ]; then

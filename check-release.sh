@@ -417,6 +417,13 @@ fi
 # KPM pin, so it can be boot-tested. It never moves a pin.
 # Patcher versions known to make a kernel that doesn't boot on our phone:
 KPM_PATCH_BROKEN="7c6289c"   # 2026-10-18 "更新KPM": its patch_linux has an empty kpimg - bootloop at POCO logo
+# KernelPatch version of the KPM pin, from KPM_NEXT_VERSION ("e00" -> 0.14.0).
+KPM_NEXT_VER="$(sed -n 's/^KPM_NEXT_VERSION = "\([0-9a-f]*\)".*/\1/p' "$BUILDER_DIR/kernel_builder.py" 2>/dev/null | head -n 1)"
+KPM_NEXT_DOT="?"
+if [ -n "$KPM_NEXT_VER" ]; then
+    _kv=$((16#$KPM_NEXT_VER))
+    KPM_NEXT_DOT="$((_kv >> 16)).$(((_kv >> 8) & 255)).$((_kv & 255))"
+fi
 kpm_patcher_report() {
     local pin pin_full next next_full head newer c short line
     pin="$(sed -n 's/^KPM_PATCH_REF = "\([0-9a-f]*\)".*/\1/p' "$BUILDER_DIR/kernel_builder.py" 2>/dev/null | head -n 1)"
@@ -440,7 +447,7 @@ kpm_patcher_report() {
         short="${c:0:7}"
         line="$(git -C "$SKPATCH" log -1 --date=short --format='%h   %ad   %s' "$c")"
         if [ "$c" = "$next_full" ]; then
-            echo "  ${G}pinned${N}  $line   (KPM pin, KernelPatch 0.13.9)"
+            echo "  ${G}pinned${N}  $line   (KPM pin, KernelPatch $KPM_NEXT_DOT)"
         elif [ -n "$next_full" ] && git -C "$SKPATCH" merge-base --is-ancestor "$c" "$next_full" 2>/dev/null; then
             case " $KPM_PATCH_BROKEN " in
                 *" $short "*) echo "  older   $line   ${D:-}(known broken - bootloop)${N}" ;;
@@ -976,8 +983,9 @@ SUSFS_NEW=0
 
 # ---- KPM bridge (SukiSU 3b58d46f+) -------------------------------------------
 # Newer SukiSU talks to KernelPatch over a kernel-to-kernel bridge
-# (kernel/extension/kpm/bridge.h). Only the pinned KernelPatch 0.13.9 has it, and
-# both sides must use the same protocol (KPM_NEXT_BRIDGE in kernel_builder.py).
+# (kernel/extension/kpm/bridge.h). Only the pinned KernelPatch has it, and both
+# sides must use the same protocol and ABI number (KPM_NEXT_BRIDGE in
+# kernel_builder.py) - KernelPatch refuses any other ABI number.
 # The build checks the same thing before compiling; this just says it early.
 KPM_ARG=""
 kpm_bridge_report() {
@@ -986,7 +994,7 @@ kpm_bridge_report() {
     hdrfile="$(git -C "$SUKI" show "$CAND_SHA:kernel/extension/kpm/bridge.h" 2>/dev/null)"
     if [ -z "$hdrfile" ]; then
         warn "SukiSU ${CAND_SHA:0:8} is older than the KPM bridge (3b58d46f)."
-        echo "        The pinned KernelPatch 0.13.9 only speaks the bridge, so the"
+        echo "        The pinned KernelPatch $KPM_NEXT_DOT only speaks the bridge, so the"
         echo "        commands below use --kpm-legacy (KernelPatch 0.13.0)."
         KPM_ARG=" --kpm-legacy"
         return 0
@@ -1103,7 +1111,7 @@ if [ "$KSU_NEW" = 1 ] || [ "$SUSFS_NEW" = 1 ] || [ "$AWG_NEW" = 1 ]; then
     fi
     if [ -z "$KPM_ARG" ]; then
         echo "        kpm_bridge                 -> applied"
-        echo "        kpm_image_patch            -> applied (KPM_NEXT kptools $(sed -n 's/^KPM_NEXT_TOOLS_REF = "\([0-9a-f]\{12\}\).*/\1/p' "$BUILDER_DIR/kernel_builder.py") + kpimg $(sed -n 's/^KPM_NEXT_KPIMG_REF = "\([0-9a-f]\{12\}\).*/\1/p' "$BUILDER_DIR/kernel_builder.py") (d09))"
+        echo "        kpm_image_patch            -> applied (KPM_NEXT kptools $(sed -n 's/^KPM_NEXT_TOOLS_REF = "\([0-9a-f]\{12\}\).*/\1/p' "$BUILDER_DIR/kernel_builder.py") + kpimg $(sed -n 's/^KPM_NEXT_KPIMG_REF = "\([0-9a-f]\{12\}\).*/\1/p' "$BUILDER_DIR/kernel_builder.py") ($KPM_NEXT_VER))"
         echo "      After boot: su -c '/data/adb/ksud kpm version' must print a number, not an error."
     fi
     echo "   3. After it boots: manager shows ${CAND_CODE}-${MAIN_UAPI} for both, check-features.sh is clean."

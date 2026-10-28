@@ -136,8 +136,9 @@ while [ "$#" -gt 0 ]; do
             shift
             ;;
         --kpm-next)
-            # KernelPatch 0.13.9 (pinned kptools + kpimg) is the default
-            # since 2026-10-26. Kept so old commands still work.
+            # The pinned KernelPatch (kptools + kpimg, KPM_NEXT_* in
+            # kernel_builder.py) is the default since 2026-10-26. Kept so old
+            # commands still work.
             shift
             ;;
         --kpm-legacy)
@@ -185,15 +186,16 @@ done
 # ---- Default values ----
 ANDROID_VERSION="android13"
 KERNEL_VERSION="5.15"
-SUB_LEVEL="220"
+SUB_LEVEL="223"
 OS_PATCH="2026-09"
 # Either a respin tag (android13-5.15.220_r00) or a raw commit SHA from
-# android.googlesource.com/kernel/common. This is the SHA of the 220 tree
-# that has been built and confirmed booting on device.
+# android.googlesource.com/kernel/common. This is the SHA of the 223 tree
+# (LTS merge, same as matrix.json) that has been built and confirmed
+# booting on device.
 # NOTE: this is the KERNEL source ref - do NOT paste a susfs4ksu commit
 # here. They are different repositories; the build will fail with an
 # HTTP 500 from googlesource if they get swapped.
-KERNEL_TAG="android13-5.15.220_r00"
+KERNEL_TAG="2316d138a3c3f2ec12cfb4b2f09ca9c95aa92ce5"
 # Set to "1" if KERNEL_TAG above is an LTS-merge respin (e.g.
 # android13-5.15.209_r00, dotted sub_level style) rather than a regular
 # date-based one (e.g. android13-5.15-2026-06_r4) - adds a "-lts" marker
@@ -354,7 +356,7 @@ check_dependencies
 echo "========================================"
 echo "  GKI KernelSU SUSFS - Build Menu"
 echo "========================================"
-echo "1) Default (android13 / 5.15 / 220 / 2026-09)"
+echo "1) Default (android13 / 5.15 / 223 / 2026-09)"
 echo "2) Custom (choose your own versions)"
 echo "3) All versions from matrix.json"
 echo "========================================"
@@ -507,7 +509,7 @@ echo "  OS Patch: $OS_PATCH"
 if [ -n "$KPM_LEGACY" ]; then
     echo "  KPM: KernelPatch 0.13.0 (--kpm-legacy, SukiSU 41083 and older only)"
 else
-    echo "  KPM: KernelPatch 0.13.9"
+    echo "  KPM: KernelPatch 0.14.0"
 fi
 if [ -n "$AMNEZIAWG" ]; then
     echo "  AmneziaWG: ON (built in)${AMNEZIAWG_COMMIT:+, commit $AMNEZIAWG_COMMIT}"
