@@ -3106,15 +3106,21 @@ CONFIG_CIFS_XATTR=y
     # kernel side (security/selinux/hooks.c + selinuxfs.c, from
     # 50_add_susfs_in_gki-*.patch), so whatever SukiSU changes INSIDE
     # their bodies never reaches a SUSFS build anyway.
+    # my_sel_open_handle_status (15b64d09), string_to_context_struct and
+    # security_context_to_sid_with_policy (e67b14e6 - parameter list too,
+    # so the whole signature is blanked) were added 2026-10-31 for the old
+    # susfs 2ad2973, whose patch still deletes them.
     _SELINUX_HIDE_DELETED_FUNCS = re.compile(
-        r'^(static [^\n;]*\b(?:my_write_context|my_write_access|my_setprocattr)\([^\n;]*\)\n\{\n)'
+        r'^(static [^\n;{]*\b(?:my_write_context|my_write_access|my_setprocattr'
+        r'|my_sel_open_handle_status|string_to_context_struct'
+        r'|security_context_to_sid_with_policy)\()[^;{]*?\)\n\{\n'
         r'.*?^\}\n',
         re.MULTILINE | re.DOTALL,
     )
 
     @classmethod
     def _strip_selinux_hide_bodies(cls, text: str) -> str:
-        return cls._SELINUX_HIDE_DELETED_FUNCS.sub(lambda m: m.group(1) + '}\n', text)
+        return cls._SELINUX_HIDE_DELETED_FUNCS.sub(lambda m: m.group(1) + '...)\n{\n}\n', text)
 
     def _recover_susfs_selinux_hide_c(self, ksu_dir) -> bool:
         # Known, narrow drift point #2: hunk #3 of the selinux_hide.c
@@ -3164,8 +3170,17 @@ CONFIG_CIFS_XATTR=y
             old, new = h['old'], h['new']
             if len(old) < 8:
                 return False
-            start_anchor = ''.join(old[:3])
-            end_anchor = ''.join(old[-3:])
+            # 3 lines each; one more at a time (up to 8) while the text
+            # is not unique - e.g. "mutex_unlock(...status_lock);\n}\n\n"
+            # ends two functions in this file.
+            n = 3
+            while n < 8 and content.count(''.join(old[:n])) > 1:
+                n += 1
+            start_anchor = ''.join(old[:n])
+            n = 3
+            while n < 8 and content.count(''.join(old[-n:])) > 1:
+                n += 1
+            end_anchor = ''.join(old[-n:])
             if content.count(start_anchor) != 1 or content.count(end_anchor) != 1:
                 return False
             start = content.index(start_anchor)
@@ -3173,6 +3188,10 @@ CONFIG_CIFS_XATTR=y
             if end <= start:
                 return False
             region = content[start:end]
+            # Blanking a body is only safe when the hunk really deletes
+            # that function (its "new" side must not define it again).
+            if self._SELINUX_HIDE_DELETED_FUNCS.search(''.join(new)):
+                return False
             if self._strip_selinux_hide_bodies(region) != self._strip_selinux_hide_bodies(''.join(old)):
                 return False
             content = content[:start] + ''.join(new) + content[end:]
@@ -3192,6 +3211,74 @@ CONFIG_CIFS_XATTR=y
             "(see _recover_susfs_selinux_hide_c)."
         )
         return True
+
+    # Log lines SukiSU-Ultra removed (45fab659 / 8f6d140e, 2026-10-30/31,
+    # tiann/KernelSU#3960) inside regions the susfs KernelSU patch rewrites.
+    # The patch was written before that, so its "old" side still has them
+    # and the hunk is rejected. Per file: (with the log, without the log).
+    _SUKISU_REMOVED_LOGS = {
+        "kernel/hook/setuid_hook.c": (
+            (
+                '    // we rely on the fact that zygote always call setresuid(3) with same uids\n'
+                '\n'
+                '    pr_info("handle_setresuid from %d to %d\\n", old_uid, new_uid);\n'
+                '\n'
+                '    if (unlikely(is_uid_manager(new_uid))) {\n',
+                '    // we rely on the fact that zygote always call setresuid(3) with same uids\n'
+                '\n'
+                '    if (unlikely(is_uid_manager(new_uid))) {\n',
+            ),
+            (
+                '        spin_unlock_irq(&current->sighand->siglock);\n'
+                '\n'
+                '        pr_info("install fd for manager: %d\\n", new_uid);\n'
+                '        ksu_install_fd();\n',
+                '        spin_unlock_irq(&current->sighand->siglock);\n'
+                '\n'
+                '        ksu_install_fd();\n',
+            ),
+        ),
+        "kernel/runtime/ksud_integration.c": (
+            (
+                '    input_hook_stopped = true;\n'
+                '    bool ret = schedule_work(&stop_input_hook_work);\n'
+                '    pr_info("unregister input kprobe: %d!\\n", ret);\n'
+                '}\n',
+                '    input_hook_stopped = true;\n'
+                '    schedule_work(&stop_input_hook_work);\n'
+                '}\n',
+            ),
+        ),
+    }
+
+    @classmethod
+    def _restore_sukisu_removed_logs(cls, rel, content, old_sides):
+        # Put back the removed log lines that the rejected hunk(s) still
+        # expect, so the "old" side can match exactly. Returns
+        # (content, restored pairs) or (None, None) on anything unexpected.
+        restored = []
+        for with_log, without_log in cls._SUKISU_REMOVED_LOGS.get(rel, ()):
+            if not any(with_log in old for old in old_sides):
+                continue
+            if content.count(with_log) == 1:
+                continue  # older SukiSU still has the log
+            if content.count(without_log) != 1 or with_log in content:
+                return None, None
+            content = content.replace(without_log, with_log, 1)
+            restored.append((with_log, without_log))
+        return content, restored
+
+    @staticmethod
+    def _drop_restored_logs(content, restored):
+        # After the hunk: if a restored log line survived (it was context,
+        # not removed by the hunk), take it out again - SukiSU removed it.
+        for with_log, without_log in restored:
+            n = content.count(with_log)
+            if n > 1:
+                return None
+            if n == 1:
+                content = content.replace(with_log, without_log, 1)
+        return content
 
     # SukiSU-Ultra's own lines in the second_stage block of
     # ksu_handle_execveat_ksud() (c4d1f7ff / f868135d, 2026-10).
@@ -3239,11 +3326,21 @@ CONFIG_CIFS_XATTR=y
                 cur['old'].append(body)
             if tag in (' ', '+'):
                 cur['new'].append(body)
-        if len(hunks) != 1:
+        # One hunk (the second_stage block) - or more since SukiSU 8f6d140e
+        # removed a log line in ksu_stop_input_hook_runtime(), which the
+        # patch's ksu_ksud_init()/fstat hunk still has in its "old" side.
+        if not hunks:
             return False
-        old, new = ''.join(hunks[0]['old']), ''.join(hunks[0]['new'])
+        olds = [''.join(h['old']) for h in hunks]
+        news = [''.join(h['new']) for h in hunks]
+        old = ''.join(olds)  # only used for the preinit test below
+        new = ''.join(news)
 
         content = target.read_text()
+        content, restored = self._restore_sukisu_removed_logs(
+            "kernel/runtime/ksud_integration.c", content, olds)
+        if content is None:
+            return False
         if content.count(self._KSUD_BLACKLIST_BLOCK) != 1:
             return False
         content = content.replace(self._KSUD_BLACKLIST_BLOCK, '', 1)
@@ -3273,9 +3370,13 @@ CONFIG_CIFS_XATTR=y
             # a ksu_preinit_release() somewhere we don't know about
             return False
 
-        if content.count(old) != 1:
+        for h_old, h_new in zip(olds, news):
+            if content.count(h_old) != 1:
+                return False
+            content = content.replace(h_old, h_new, 1)
+        content = self._drop_restored_logs(content, restored)
+        if content is None:
             return False
-        content = content.replace(old, new, 1)
 
         forced = '                ksu_feature_apply_forced();\n'
         if content.count(forced) != 1 or 'ksu_module_blacklist_apply' in content:
@@ -3308,6 +3409,8 @@ CONFIG_CIFS_XATTR=y
             "at second stage init (upstream KernelSU doesn't). Applied the hunk "
             "and put the call back after ksu_feature_apply_forced()"
             + (", plus SukiSU's ksu_preinit_release() calls" if preinit_spots else "")
+            + ("; %d hunk(s), %d log line(s) SukiSU removed put back for the match"
+               % (len(hunks), len(restored)) if restored else "")
             + " (see _recover_susfs_ksud_integration_c)."
         )
         return True
@@ -3445,6 +3548,10 @@ CONFIG_CIFS_XATTR=y
         old, new = ''.join(hunks[0]['old']), ''.join(hunks[0]['new'])
 
         content = target.read_text()
+        content, restored = self._restore_sukisu_removed_logs(
+            "kernel/hook/setuid_hook.c", content, [old])
+        if content is None:
+            return False
         pair = self._SETUID_UMOUNT_INCLUDE + self._SETUID_MOUNT_HIDE_INCLUDE
         if content.count(self._SETUID_MOUNT_HIDE_INCLUDE) != 1 or content.count(pair) != 1:
             return False
@@ -3453,6 +3560,9 @@ CONFIG_CIFS_XATTR=y
         if content.count(old) != 1:
             return False
         content = content.replace(old, new, 1)
+        content = self._drop_restored_logs(content, restored)
+        if content is None:
+            return False
 
         if content.count(self._SETUID_UMOUNT_INCLUDE) != 1:
             return False
@@ -3469,7 +3579,10 @@ CONFIG_CIFS_XATTR=y
         logger.info(
             "kernel/hook/setuid_hook.c: SUSFS<->KernelSU patch hunk didn't match because "
             'SukiSU-Ultra added #include "feature/mount_hide.h". Applied the hunk and put '
-            "the include back (see _recover_susfs_setuid_hook_c)."
+            "the include back"
+            + ("; %d log line(s) SukiSU removed put back for the match" % len(restored)
+               if restored else "")
+            + " (see _recover_susfs_setuid_hook_c)."
         )
         return True
 

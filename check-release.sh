@@ -29,6 +29,10 @@
 #   5. remembers that suggestion, and on the NEXT run asks whether you built,
 #      flashed and tested it - answer 1 and it updates the known-good pins
 #      in config.py by itself.
+#   5b. --susfs <commit> tests that one susfs commit instead of the branch
+#      HEAD (e.g. an older one that made a good kernel) and prints the
+#      commands for it. No fallbacks then. The list of newer commits it leaves
+#      out is printed, so you can step through them one by one.
 #   6. (android13-5.15) takes amneziawg-linux-kernel-module master HEAD and
 #      runs the build's own prepare_amneziawg_src() on it. If it fits, the
 #      commands get --amneziawg-commit <HEAD> and answer 1 saves it too; if
@@ -56,14 +60,18 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 BUILDER_DIR="$SCRIPT_DIR/.github/workflows/scripts"
 CONFIG_PY="$BUILDER_DIR/config.py"
 ASK=1
+SUSFS_FORCE=""
 
 while [ $# -gt 0 ]; do
     case "$1" in
         --branch) BRANCH="$2"; shift 2 ;;
         --cache)  CACHE="$2"; shift 2 ;;
         --no-ask) ASK=0; shift ;;
+        --susfs)  [ $# -ge 2 ] || { echo "--susfs needs a susfs commit" >&2; exit 1; }
+                  SUSFS_FORCE="$2"; shift 2 ;;
         -h|--help)
             echo "Usage: $0 [--branch gki-android13-5.15|gki-android14-6.1|gki-android15-6.6] [--cache DIR] [--no-ask]"
+            echo "          [--susfs <commit>]   test this susfs commit instead of the branch HEAD"
             exit 0 ;;
         *) echo "Unknown argument: $1" >&2; exit 1 ;;
     esac
@@ -340,7 +348,31 @@ SUSFS_PIN_FULL="$(norm_susfs "$SUSFS_PIN")"
 SUSFS_PIN_K="$(susfs_k "$SUSFS_PIN_FULL")"
 SUSFS_HEAD="$(sha_of "$SUSFS" "origin/$BRANCH")"
 [ -n "$SUSFS_HEAD" ] || { bad "branch $BRANCH does not exist on $SUSFS_URL"; exit 1; }
-if [ -z "$SUSFS_PIN" ]; then
+if [ -n "$SUSFS_FORCE" ]; then
+    # --susfs <commit>: this commit instead of HEAD, no re-base walk, no fallbacks.
+    SUSFS_BRANCH_HEAD="$SUSFS_HEAD"
+    SUSFS_HEAD="$(sha_of "$SUSFS" "$SUSFS_FORCE")"
+    if [ -z "$SUSFS_HEAD" ]; then
+        bad "--susfs $SUSFS_FORCE: no such commit in susfs4ksu"; exit 1
+    fi
+    if ! git -C "$SUSFS" merge-base --is-ancestor "$SUSFS_HEAD" "$SUSFS_BRANCH_HEAD" 2>/dev/null; then
+        bad "--susfs ${SUSFS_HEAD:0:8} is not on branch $BRANCH"; exit 1
+    fi
+    [ -n "$SUSFS_PIN" ] && echo "  built   $(short_susfs "$SUSFS_PIN_FULL")"
+    echo "  chosen  $(git -C "$SUSFS" log -1 --format='%h  %ad  %s' --date=short "$SUSFS_HEAD")  (--susfs)"
+    if [ "$SUSFS_HEAD" != "$SUSFS_BRANCH_HEAD" ]; then
+        echo "  newer commits left out ($(git -C "$SUSFS" rev-list --count "$SUSFS_HEAD..$SUSFS_BRANCH_HEAD"), newest first) - each one can be tried with --susfs:"
+        git -C "$SUSFS" log --format='      %h  %ad  %s' --date=short "$SUSFS_HEAD..$SUSFS_BRANCH_HEAD" \
+            | head -n 25
+    fi
+    # The build keeps SukiSU's module preinit only when the susfs kernel-side
+    # patch wires it (kernel_builder.py _susfs_wires_preinit, susfs 3ebb8a6+).
+    if ! git -C "$SUSFS" show "$SUSFS_HEAD:kernel_patches/50_add_susfs_in_${BRANCH}.patch" 2>/dev/null \
+         | grep -q ksu_setup_preinit_file; then
+        echo "  INFO  this susfs is older than SUSFS module preinit support - the build"
+        echo "        compiles SukiSU's module preinit out (like v41030 and older)."
+    fi
+elif [ -z "$SUSFS_PIN" ]; then
     echo "  HEAD   ${SUSFS_HEAD:0:8}  (no known-good pin for this branch in config.py yet)"
 elif [ "$SUSFS_HEAD" != "$SUSFS_PIN_K" ]; then
     echo "  built  $(short_susfs "$SUSFS_PIN_FULL")"
@@ -389,7 +421,7 @@ PY
 # Walk back from HEAD through commits that are only re-bases and take the
 # oldest one with HEAD's code: the pin itself if nothing real changed, or
 # e.g. 2ad29735 instead of 054b2432 when only a re-base came after it.
-if [ -n "$SUSFS_PIN" ] && [ "$SUSFS_HEAD" != "$SUSFS_PIN_K" ]; then
+if [ -z "$SUSFS_FORCE" ] && [ -n "$SUSFS_PIN" ] && [ "$SUSFS_HEAD" != "$SUSFS_PIN_K" ]; then
     SUSFS_CODE_OF="$SUSFS_HEAD"
     while read -r c; do
         [ -n "$c" ] || continue
@@ -905,7 +937,10 @@ case "$VERDICT" in
     *)               tried "$DETAIL"; drift_report "$LAST_FAILED" ;;
 esac
 TRY_FALLBACK=1
-if [ "$VERDICT" = "STOP" ] && [ "$PATCH_SAME" = 1 ]; then
+if [ "$VERDICT" = "STOP" ] && [ -n "$SUSFS_FORCE" ]; then
+    TRY_FALLBACK=0
+    echo "  (--susfs: no fallbacks - this exact susfs commit or nothing)"
+elif [ "$VERDICT" = "STOP" ] && [ "$PATCH_SAME" = 1 ]; then
     TRY_FALLBACK=0
     echo "  The susfs KernelSU patch is the same one that worked last time"
     echo "  (${PIN_PATCH_REF:0:8}), so older versions of it won't help - skipping fallbacks."
@@ -957,7 +992,7 @@ fi
 # already works on the phone - same SUSFS code as the current kernel. The
 # newer susfs waits for a separate look.
 SUSFS_HELD=0
-if [ "$VERDICT" = "STOP" ] && [ "$PATCH_SAME" = 0 ] && [ -n "$SUSFS_PIN_FULL" ] && \
+if [ "$VERDICT" = "STOP" ] && [ -z "$SUSFS_FORCE" ] && [ "$PATCH_SAME" = 0 ] && [ -n "$SUSFS_PIN_FULL" ] && \
    [ "$SUSFS_HEAD" != "$SUSFS_PIN_K" ]; then
     PIN_PATCH_REF="$(susfs_p "$SUSFS_PIN_FULL")"; : "${PIN_PATCH_REF:=$SUSFS_PIN_K}"
     hdr "Fallback: ${CAND_LABEL} ${CAND_SHA:0:8} + known-good susfs $(short_susfs "$SUSFS_PIN_FULL")"
@@ -1065,6 +1100,8 @@ else
         echo "        If the build fails in one of those files, that is the reason -"
         echo "        send this output and the build log."
     fi
+    [ -n "$SUSFS_FORCE" ] && [ "$SUSFS_HEAD" != "$SUSFS_BRANCH_HEAD" ] && \
+        echo "        (susfs ${SUSFS_HEAD:0:8} chosen with --susfs, not the branch HEAD ${SUSFS_BRANCH_HEAD:0:8})"
     [ "$SUSFS_HELD" = 1 ] && \
         echo "        (new SukiSU, susfs stays on $(short_susfs "$SUSFS_USE") - newer susfs ${SUSFS_HEAD:0:8} doesn't fit yet)"
     [ "$AWG_NEW" = 1 ] && [ "$KSU_NEW" = 0 ] && [ "$SUSFS_NEW" = 0 ] && \
