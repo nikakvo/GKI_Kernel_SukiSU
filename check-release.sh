@@ -623,6 +623,12 @@ patch_test() {
         | sort -u | tr '\n' ' ')"
     n_failed="$(printf '%s\n' "$out" | grep -cE '^Hunk.*FAILED' || true)"
     LAST_FAILED="$failed_files"
+    # Exit 2 = patch gave up (malformed patch file, ...): the files after that
+    # point were never patched, so no recovery can make this a real fit.
+    if [ "$rc" -gt 1 ]; then
+        echo "  patch stopped with exit code $rc: $(printf '%s\n' "$out" | grep -m1 -E '^patch: ' || echo '?')"
+        DETAIL="patch exit code $rc (the patch file itself is broken)"; drop_worktree; return
+    fi
     if [ "$rc" -ne 0 ]; then
         echo "  $n_failed hunk(s) failed in: ${failed_files:-?}"
     fi

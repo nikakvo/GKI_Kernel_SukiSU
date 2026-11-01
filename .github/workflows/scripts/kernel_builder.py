@@ -2697,6 +2697,16 @@ CONFIG_CIFS_XATTR=y
         self._chdir(ksu_dir)
         result = self._run_cmd(f"patch -p1 --fuzz=3 < {patch_file}", check=False)
         self._chdir(self.work_dir)
+        if result.returncode > 1:
+            # Exit 2 = patch gave up part way (malformed patch file, ...):
+            # the files after that point were never patched, so the
+            # recoveries below could "succeed" on a half-patched tree.
+            self._mark("susfs_kernelsu_integration", "failed", f"patch exit code {result.returncode}")
+            raise RuntimeError(
+                f"SUSFS<->KernelSU integration patch: `patch` stopped with exit "
+                f"code {result.returncode} (the patch file itself is broken, not "
+                f"just rejected hunks). Stopping."
+            )
         if result.returncode != 0:
             recovered = self._recover_susfs_init_c(ksu_dir)
             if not recovered:
@@ -2827,13 +2837,34 @@ CONFIG_CIFS_XATTR=y
         init_rej = ksu_dir / "kernel/core/init.c.rej"
         rej_text = init_rej.read_text() if init_rej.exists() else ""
 
+        # susfs 4fce651+ (2026-10-31, "Sync with upstream" = tiann/KernelSU
+        # bec9c13) no longer retires the symbol resolver: upstream calls
+        # ksu_init_symbol_resolver() early in kernelsu_init() (before
+        # ksu_selinux_inode_init(), where SukiSU has it too), so hunk #3
+        # keeps the include as context and hunk #7 no longer removes the
+        # call. Older susfs removes both. Decided from the rejected hunks
+        # themselves; anything in between -> False.
+        resolver_inc = '#include "infra/symbol_resolver.h"\n'
+        resolver_call = '    ksu_init_symbol_resolver();\n'
+        drops_inc = ('-' + resolver_inc) in rej_text
+        keeps_inc = (' ' + resolver_inc) in rej_text
+        drops_call = ('-' + resolver_call) in rej_text
+        if drops_inc == keeps_inc or (keeps_inc and drops_call):
+            logger.error(
+                "kernel/core/init.c recovery: the rejected hunks treat the symbol "
+                "resolver in a way this recovery doesn't know"
+            )
+            return False
+        keep_resolver = keeps_inc
+
         try:
             # --- hunk #3 equivalent: includes + x86 dispatcher-safety block ---
             content = self._replace_once(content, '#include "hook/syscall_hook.h"\n', '')
             content = self._replace_once(
                 content,
-                '#include "infra/symbol_resolver.h"\n',
-                '#include "hook/setuid_hook.h"\n#include "feature/sucompat.h"\n',
+                resolver_inc,
+                (resolver_inc if keep_resolver else '')
+                + '#include "hook/setuid_hook.h"\n#include "feature/sucompat.h"\n',
             )
             x86_block = (
                 '#if defined(__x86_64__) && !defined(CONFIG_KSU_X86_PATCH_SYSCALL_DISPATCHER)\n'
@@ -2894,7 +2925,7 @@ CONFIG_CIFS_XATTR=y
             # --- hunk #7 equivalent: retire the old hook-manager/
             # symbol-resolver init sequence, wire up the new one ---
             for dead in [
-                '    ksu_init_symbol_resolver();\n\n',
+                *([] if keep_resolver else [resolver_call + '\n']),
                 '    ksu_syscall_hook_init();\n\n',
                 '    ksu_lsm_hook_init();\n',
             ]:
@@ -3090,8 +3121,10 @@ CONFIG_CIFS_XATTR=y
             "_recover_susfs_init_c). The result was checked against every "
             "line those hunks add or remove. "
             "Manually finished the same migration those hunks were "
-            "trying to make: retired the old hook-manager/symbol-"
-            "resolver init calls (their backing .o files are already "
+            "trying to make: retired the old hook-manager"
+            + (" init calls (symbol resolver kept, as this susfs wants; "
+               if keep_resolver else "/symbol-resolver init calls (") +
+            "their backing .o files are already "
             "dropped from kernel/Kbuild by this patch's own successful "
             "hunk) and wired up ksu_sucompat_init()/ksu_setuid_hook_init()/"
             "susfs_init() in their place. Also re-added "
@@ -3664,11 +3697,14 @@ CONFIG_CIFS_XATTR=y
     # right after track_throne(false) - the renew must run after the scan.
     # On SukiSU that hunk applies with an offset only, no fuzz.
     _PKG_OBS_TW_FUNC = 'static void ksu_track_throne_tw_func(struct callback_head *cb)\n{\n'
-    _PKG_OBS_TW_PRIORITY = (
+    # susfs be78a2a (2026-10-31) only reworded the comment ("getpriority"
+    # -> "priority"); both forms are accepted.
+    _PKG_OBS_TW_PRIORITY = tuple(
         '    track_throne(false);\n'
-        '    // Renew the getpriority uid bitmap filter\n'
+        f'    // Renew the {word} uid bitmap filter\n'
         '    susfs_parse_priority_app_strings();\n'
         '}\n'
+        for word in ('getpriority', 'priority')
     )
 
     def _fixup_susfs_pkg_observer_c(self, ksu_dir) -> bool:
@@ -3698,8 +3734,14 @@ CONFIG_CIFS_XATTR=y
             return False
         # susfs f3ceb5d+: the call ends ksu_track_throne_tw_func(). Accept it
         # only there (first closing brace after the function head).
-        tw_head, tw_tail = self._PKG_OBS_TW_FUNC, self._PKG_OBS_TW_PRIORITY
-        if text.count(tw_tail) == 1:
+        tw_head = self._PKG_OBS_TW_FUNC
+        tw_tails = [t for t in self._PKG_OBS_TW_PRIORITY if t in text]
+        if len(tw_tails) > 1:
+            return False
+        if tw_tails:
+            tw_tail = tw_tails[0]
+            if text.count(tw_tail) != 1:
+                return False
             if text.count(tw_head) != 1:
                 return False
             start = text.index(tw_head)
