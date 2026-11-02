@@ -315,6 +315,11 @@ CONFIG_KSU_SUSFS_ENABLE_LOG=y
 CONFIG_KSU_SUSFS_HIDE_KSU_SUSFS_SYMBOLS=y
 CONFIG_KSU_SUSFS_SPOOF_CMDLINE_OR_BOOTCONFIG=y
 CONFIG_KSU_SUSFS_OPEN_REDIRECT=y
+# susfs e06d277 (2026-11-02) made the priority uid filter its own option
+# (default y). Older susfs patches don't define it - Kconfig drops the line
+# there, and it is only expected in the Image when the patch defines it
+# (see _expected_config_symbols / _susfs_defines_priority_uid_filter).
+CONFIG_KSU_SUSFS_PRIORITY_UID_FILTER=y
 
 # === Wireguard Config (forced on regardless of the branch's own
 # gki_defconfig default, since not every branch ships it enabled) ===
@@ -1513,6 +1518,16 @@ CONFIG_CIFS_XATTR=y
     @staticmethod
     def _version_tuple(v: str):
         return tuple(int(x) for x in v.split("."))
+
+    def _susfs_defines_priority_uid_filter(self) -> bool:
+        """Whether the applied susfs KernelSU patch has its own Kconfig
+        option for the priority uid filter (susfs e06d277+). Older susfs
+        builds the filter unconditionally and has no such symbol."""
+        kconfig = self.work_dir / "KernelSU" / "kernel" / "Kconfig"
+        try:
+            return "config KSU_SUSFS_PRIORITY_UID_FILTER\n" in kconfig.read_text()
+        except OSError:
+            return False
 
     def _has_fuse_bpf(self) -> bool:
         """Whether this branch actually has FUSE-BPF (fs/fuse/backing.c).
@@ -3699,11 +3714,21 @@ CONFIG_CIFS_XATTR=y
     _PKG_OBS_TW_FUNC = 'static void ksu_track_throne_tw_func(struct callback_head *cb)\n{\n'
     # susfs be78a2a (2026-10-31) only reworded the comment ("getpriority"
     # -> "priority"); both forms are accepted.
+    # susfs e06d277 (2026-11-02) made the priority uid filter its own
+    # Kconfig option (CONFIG_KSU_SUSFS_PRIORITY_UID_FILTER) and wraps the
+    # call in #ifdef/#endif - same place, so that form is accepted too.
+    _PKG_OBS_TW_PRIORITY_GUARD = (
+        '#ifdef CONFIG_KSU_SUSFS_PRIORITY_UID_FILTER\n',
+        '#endif // #ifdef CONFIG_KSU_SUSFS_PRIORITY_UID_FILTER\n',
+    )
     _PKG_OBS_TW_PRIORITY = tuple(
         '    track_throne(false);\n'
-        f'    // Renew the {word} uid bitmap filter\n'
+        + (guard[0] if guard else '')
+        + f'    // Renew the {word} uid bitmap filter\n'
         '    susfs_parse_priority_app_strings();\n'
-        '}\n'
+        + (guard[1] if guard else '')
+        + '}\n'
+        for guard in ((), _PKG_OBS_TW_PRIORITY_GUARD)
         for word in ('getpriority', 'priority')
     )
 
@@ -5392,6 +5417,8 @@ CONFIG_CIFS_XATTR=y
             ("CONFIG_DEBUG_INFO_BTF", False),
             ("CONFIG_BPF_EVENTS", False),
         ]
+        if self._susfs_defines_priority_uid_filter():
+            symbols.append(("CONFIG_KSU_SUSFS_PRIORITY_UID_FILTER", False))
         if self.config.use_kpm:
             symbols.append(("CONFIG_KPM", False))
         if self._amneziawg_applied():
