@@ -921,6 +921,60 @@ CONFIG_CIFS_XATTR=y
         self.env["REPO"] = str(repo_path)
         self.shell.env = self.env
 
+    # Name of the per-build directory, the same pattern cleanup-workspace.sh
+    # deletes. _clean_leftover_work_dir() refuses to touch anything else.
+    _WORK_DIR_NAME_RE = re.compile(r"android[0-9]+-[0-9.]+-[0-9X]+")
+    # Folders of a finished build that are worth keeping (the top-level
+    # files - zips, boot images, Image, PATCH_STATUS.json - are kept too).
+    _LEFTOVER_KEEP_DIRS = ("ath9k-modules", "bootimgs")
+
+    def _clean_leftover_work_dir(self):
+        """Start every build from an empty work_dir.
+
+        A finished, failed or interrupted (Ctrl+C) build leaves the kernel
+        tree patched (common/, build/, KernelSU/, out/). The next build
+        then fails in confusing ways: repo sync "local changes would be
+        overwritten", ptrace/unicode/ntsync FAIL, SUSFS "Reversed (or
+        previously applied) patch detected". cleanup-workspace.sh fixes
+        that by hand; this does the same thing automatically, so a
+        forgotten cleanup can no longer break a build.
+
+        The previous build's results (top-level files and the
+        ath9k-modules/ + bootimgs/ folders) are moved to
+        <workspace>/previous-<config_name>/ first (replacing the one saved
+        before), so a boot image that was not copied out yet is not lost.
+        Only the dir name pattern cleanup-workspace.sh uses is ever deleted.
+        """
+        wd = self.work_dir
+        if not wd.is_dir() or not any(wd.iterdir()):
+            return
+        if (wd.parent.resolve() != self.workspace.resolve()
+                or not self._WORK_DIR_NAME_RE.fullmatch(wd.name)):
+            raise RuntimeError(
+                f"{wd} is not empty but does not look like a build directory "
+                f"of this workspace - refusing to delete it. Remove it by hand.")
+
+        logger.info("=== Cleaning leftovers of the previous build ===")
+        keep = [p for p in wd.iterdir()
+                if (p.is_file() and not p.is_symlink())
+                or (p.name in self._LEFTOVER_KEEP_DIRS and p.is_dir()
+                    and not p.is_symlink())]
+        if keep:
+            saved = self.workspace / f"previous-{wd.name}"
+            subprocess.run(["rm", "-rf", "--", str(saved)], check=True)
+            saved.mkdir()
+            for p in keep:
+                shutil.move(str(p), str(saved / p.name))
+            logger.info(f"Previous build results ({len(keep)} item(s)) moved to {saved}")
+        logger.info(f"Deleting the old build directory {wd} (patched tree from the "
+                    f"previous build - same as cleanup-workspace.sh)")
+        subprocess.run(["rm", "-rf", "--", str(wd)], check=True)
+        if wd.exists():
+            raise RuntimeError(f"could not delete {wd} - remove it by hand and build again")
+        wd.mkdir(parents=True)
+        self._mark("leftover_cleanup", "applied",
+                   f"old {wd.name} deleted" + (f", {len(keep)} result item(s) kept in previous-{wd.name}" if keep else ""))
+
     def init_and_sync_kernel(self):
         logger.info("=== Initializing and syncing kernel source ===")
         self._chdir(self.work_dir)
@@ -6100,6 +6154,7 @@ CONFIG_CIFS_XATTR=y
         logger.info("=" * 50)
 
         try:
+            self._clean_leftover_work_dir()
             self.clone_repositories()
             self.clone_toolchain()
             self.setup_repo_tool()

@@ -102,6 +102,8 @@ cd GKI_Kernel_SukiSU
 ./cleanup-workspace.sh       # free disk space between builds
 ```
 
+Every build starts from a clean tree: if `~/gki-workspace/<android>-<kernel>-<sub_level>` still holds a previous (or interrupted) build, it is deleted first, and that build's zips, boot images and `ath9k-modules/` are moved to `~/gki-workspace/previous-<android>-<kernel>-<sub_level>/` (only the last one is kept). `cleanup-workspace.sh` is still there to free the disk space by hand.
+
 With no flags it builds **exactly the SukiSU-Ultra / SUSFS combination of the latest release**. The pins live at the top of `.github/workflows/scripts/config.py`.
 
 Useful `build-kernel.sh` options:
