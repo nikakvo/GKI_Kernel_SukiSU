@@ -6,8 +6,11 @@ A **GKI kernel** with **SukiSU-Ultra** (root) and **SUSFS** (root hiding) built 
 
 Download the latest build from **[Releases](https://github.com/nikakvo/GKI_Kernel_SukiSU/releases)**. Each release lists its exact kernel, SukiSU-Ultra and SUSFS versions and the matching manager.
 
+**Have a question? Read the [FAQ](#faq) first - the common ones are answered there.**
+
 ---
 
+<a id="scope"></a>
 ## ⚠️ Scope - read this first
 
 | Target | Status |
@@ -88,6 +91,71 @@ If the phone does not boot: hold **Power + Volume Down** for fastboot and flash 
 ```bash
 fastboot flash boot_ab <your-backup-boot.img>
 ```
+
+---
+
+## FAQ
+
+1. [Does it pass Duck Detector (or any other detector)?](#faq-detectors)
+2. [How do I install it?](#faq-install)
+3. [Will it work on my device / ROM?](#faq-device)
+4. [What is Full LTO? Is it different from Thin LTO or no LTO?](#faq-lto)
+5. [The manager shows a version mismatch](#faq-manager)
+6. [How do I know a feature is working?](#faq-features)
+7. [My phone doesn't boot after flashing](#faq-noboot)
+8. [Can you add support for my device or build it for me?](#faq-support)
+
+<a id="faq-detectors"></a>
+### 1. Does it pass Duck Detector (or any other detector)?
+
+I don't run detector apps and I don't publish detector results. The test that matters here is real life: on my setup, Google Wallet, Revolut, PayPal and banking apps all work every day.
+
+Detector apps are made to find every possible trace of root or kernel changes, far more than any real app checks. Chasing a clean detector score often means breaking a setup that already works, just to make one test app happy. That is not the goal of this kernel.
+
+The kernel gives you the tools (SukiSU-Ultra and the SUSFS kernel side). What gets hidden depends on the [SUSFS userspace module](#susfs-userspace) and how you configure it, not on the kernel alone.
+
+<a id="faq-install"></a>
+### 2. How do I install it?
+
+Everything is in [Installation](#installation): back up your `boot.img`, flash the `boot.img` or the AnyKernel3 zip, install the manager named in the release notes, then flash the SUSFS userspace module.
+
+<a id="faq-device"></a>
+### 3. Will it work on my device / ROM?
+
+See [Scope](#scope). Only `vermeer` (Poco F6 Pro / K70) on clean Xiaomi.eu HyperOS is tested. Other `android13-5.15` GKI devices may boot, but that is untested and at your own risk. Try it first with `fastboot boot <boot.img>` - nothing is written, and a reboot brings your old kernel back.
+
+<a id="faq-lto"></a>
+### 4. What is Full LTO? Is it different from Thin LTO or no LTO?
+
+LTO (Link Time Optimization) is how the compiler optimizes the kernel when it is put together:
+
+| Mode | What it means |
+|------|---------------|
+| **No LTO** | Every source file is optimized on its own. |
+| **Thin LTO** | Optimizes across files in parallel chunks. Fast to build, needs less RAM. |
+| **Full LTO** | Optimizes the whole kernel as one unit. Slightly tighter code, but needs ~27 GB RAM and a much longer build. |
+
+The features are the same in all modes. Release builds are Full LTO; GitHub Actions builds are Thin LTO.
+
+<a id="faq-manager"></a>
+### 5. The manager shows a version mismatch
+
+Use the **SukiSU-Ultra manager linked in the release notes**. The official tagged manager APK usually reports a different version number than the kernel.
+
+<a id="faq-features"></a>
+### 6. How do I know a feature is working?
+
+Run [`check-features.sh`](#check-what-is-active). It prints `OK`, `MISSING`, `NOT BUILT` or `N/A` for every feature.
+
+<a id="faq-noboot"></a>
+### 7. My phone doesn't boot after flashing
+
+Hold **Power + Volume Down** for fastboot and flash your backup - see [Emergency recovery](#emergency-recovery).
+
+<a id="faq-support"></a>
+### 8. Can you add support for my device or build it for me?
+
+No. This is a personal build for my own phone, shared as is, without support. The whole build system is in this repo - see [Building it yourself](#building-it-yourself) to build for your own kernel version.
 
 ---
 
