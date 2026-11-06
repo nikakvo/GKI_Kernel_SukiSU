@@ -114,6 +114,8 @@ Detector apps are made to find every possible trace of root or kernel changes, f
 
 The kernel gives you the tools (SukiSU-Ultra and the SUSFS kernel side). What gets hidden depends on the [SUSFS userspace module](#susfs-userspace) and how you configure it, not on the kernel alone.
 
+**A green screen in a detector doesn't pay your bills.** 😄
+
 <a id="faq-install"></a>
 ### 2. How do I install it?
 
