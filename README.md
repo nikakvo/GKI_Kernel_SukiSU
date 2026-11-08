@@ -180,7 +180,7 @@ Useful `build-kernel.sh` options:
 
 | Option | Meaning |
 |--------|---------|
-| `--pids` | Add `CONFIG_CGROUP_PIDS` for Droidspaces (android13-5.15, used in releases) |
+| `--no-pids` | Build without `CONFIG_CGROUP_PIDS` for Droidspaces (it is on by default, android13-5.15) |
 | `--kpm-legacy` | Old KPM patcher (KernelPatch 0.13.0) for SukiSU 41083 and older. Default is the pinned KernelPatch (0.14.0, KPM bridge ABI 2), which current SukiSU needs |
 | `--ksu-commit <ref>` | Other SukiSU-Ultra commit / tag / `main` |
 | `--ksu-version-code <n>` | Version number the kernel reports - must match your manager |

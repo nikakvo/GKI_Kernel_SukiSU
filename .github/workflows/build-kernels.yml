@@ -63,10 +63,10 @@ on:
         type: boolean
         default: true
       droidspaces_pids:
-        description: 'EXPERIMENTAL: also Droidspaces --pids-limit (CONFIG_CGROUP_PIDS via the net_prio slot swap) - android13-5.15 with Droidspaces only, other branches skip it. Files get a "-pids" marker.'
+        description: 'Droidspaces --pids-limit (CONFIG_CGROUP_PIDS via the kABI-neutral net_prio slot swap) - android13-5.15 with Droidspaces only, other branches skip it. Files get a "-pids" marker.'
         required: true
         type: boolean
-        default: false
+        default: true
       amneziawg:
         description: 'Build AmneziaWG in next to WireGuard (pinned commit from config.py) - android13-5.15 only, other branches skip it by themselves.'
         required: true

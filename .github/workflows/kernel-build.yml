@@ -4,7 +4,7 @@ name: Kernel Build
 # the same kernel as ./build-kernel.sh with no flags in WSL (menu option 1):
 # android13-5.15.223 (LTS merge 2316d138, resolved from matrix.json),
 # the known-good SukiSU / susfs / AmneziaWG pins from config.py, KPM,
-# ZRAM, MGLRU, PSI, NTSync, Baseband-guard, Droidspaces, extra networking,
+# ZRAM, MGLRU, PSI, NTSync, Baseband-guard, Droidspaces (with pids), extra networking,
 # BBRv3, AmneziaWG and the ath9k_htc modules (android13-5.15 only).
 # One difference that cannot be avoided: LTO is thin here (full LTO needs
 # ~27 GB RAM, more than a GitHub runner has).
@@ -115,10 +115,10 @@ on:
         type: boolean
         default: true
       droidspaces_pids:
-        description: 'EXPERIMENTAL: also Droidspaces --pids-limit (CONFIG_CGROUP_PIDS via the net_prio slot swap) - android13-5.15 with Droidspaces only. Same as ./build-kernel.sh --pids; files get a "-pids" marker.'
+        description: 'Droidspaces --pids-limit (CONFIG_CGROUP_PIDS via the kABI-neutral net_prio slot swap) - android13-5.15 with Droidspaces only, other branches skip it. On in local and release builds; files get a "-pids" marker.'
         required: true
         type: boolean
-        default: false
+        default: true
       amneziawg:
         description: 'Build AmneziaWG in next to WireGuard (pinned commit from config.py) - android13-5.15 only, other branches skip it by themselves. Use it with WG Shield 2.0+.'
         required: true

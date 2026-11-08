@@ -97,7 +97,7 @@ KSU_COMMIT=""
 SUSFS_COMMIT=""
 AMNEZIAWG_COMMIT=""
 NO_HIDE_STUFF=""
-PIDS_CLI=""
+NO_PIDS=""
 while [ "$#" -gt 0 ]; do
     case "$1" in
         --ksu-commit)
@@ -129,10 +129,14 @@ while [ "$#" -gt 0 ]; do
             shift
             ;;
         --pids|--droidspaces-pids)
-            # EXPERIMENTAL test builds: CONFIG_CGROUP_PIDS for Droidspaces'
-            # --pids-limit via the net_prio cgroup slot swap (see
-            # DROIDSPACES_PIDS below). Output files get a "-pids" marker.
-            PIDS_CLI="1"
+            # Droidspaces pids is on by default since 2026-11 (see
+            # DROIDSPACES_PIDS below). Kept so old commands still work.
+            shift
+            ;;
+        --no-pids)
+            # Build without CONFIG_CGROUP_PIDS (keeps the stock net_prio
+            # cgroup) - for an A/B test if pids is ever suspected.
+            NO_PIDS="1"
             shift
             ;;
         --kpm-next)
@@ -176,7 +180,7 @@ while [ "$#" -gt 0 ]; do
             ;;
         *)
             echo "Unknown argument: $1"
-            echo "Usage: $0 [--ksu-commit <tag|commit|branch>] [--susfs-commit <commit|branch=commit,...|latest>] [--ksu-version-code <N>] [--no-hide-stuff] [--no-ath9k] [--no-amneziawg] [--amneziawg-commit <sha>] [--pids] [--kpm-legacy]"
+            echo "Usage: $0 [--ksu-commit <tag|commit|branch>] [--susfs-commit <commit|branch=commit,...|latest>] [--ksu-version-code <N>] [--no-hide-stuff] [--no-ath9k] [--no-amneziawg] [--amneziawg-commit <sha>] [--no-pids] [--kpm-legacy]"
             echo "Without pin flags, the known-good pins from .github/workflows/scripts/config.py are used."
             exit 1
             ;;
@@ -212,16 +216,15 @@ IS_LTS="1"
 # entry after a build to see whether it actually landed).
 # Defaults to enabled - set to "" to build without it.
 DROIDSPACES="1"
-# EXPERIMENTAL - set to "1" to also enable CONFIG_CGROUP_PIDS for
-# Droidspaces' --pids-limit (android13-5.15 only, needs DROIDSPACES).
-# pids takes the cgroup id of net_prio (turned off), so the GKI kABI and
-# symbol CRCs stay stock. Check PATCH_STATUS.json "droidspaces_pids".
-# Off by default: test builds only until proven on the device.
-# One-off test build without editing this file:
-#   ./build-kernel.sh ... --pids        (or DROIDSPACES_PIDS=1 ./build-kernel.sh ...)
-# check-release.sh prints both commands, with and without --pids.
-DROIDSPACES_PIDS="${DROIDSPACES_PIDS:-}"
-[ -n "$PIDS_CLI" ] && DROIDSPACES_PIDS="1"
+# DROIDSPACES_PIDS: CONFIG_CGROUP_PIDS for Droidspaces' --pids-limit
+# (android13-5.15 only, needs DROIDSPACES; other branches skip it by
+# themselves). pids takes the cgroup id of net_prio (turned off), so the
+# GKI kABI and symbol CRCs stay stock. Check PATCH_STATUS.json
+# "droidspaces_pids". Output files get a "-pids" marker.
+# On by default since 2026-11 (was an experimental opt-in, proven on the
+# device in every release since v40996). Build without it: --no-pids.
+DROIDSPACES_PIDS="1"
+[ -n "$NO_PIDS" ] && DROIDSPACES_PIDS=""
 # Congestion control: "none", "bbr1", or "bbr3" (android12/13/14/15
 # so far - see README's "BBRv3" note).
 BBR_VERSION="bbr3"
@@ -505,7 +508,7 @@ echo "  Kernel:   $KERNEL_VERSION"
 echo "  Sublevel: $SUB_LEVEL"
 echo "  OS Patch: $OS_PATCH"
 [ -n "$KERNEL_TAG" ] && echo "  Kernel Tag: $KERNEL_TAG"
-[ -n "$DROIDSPACES_PIDS" ] && echo "  Droidspaces pids: ON (experimental test build, files get -pids)"
+[ -z "$DROIDSPACES_PIDS" ] && echo "  Droidspaces pids: OFF (--no-pids)"
 if [ -n "$KPM_LEGACY" ]; then
     echo "  KPM: KernelPatch 0.13.0 (--kpm-legacy, SukiSU 41083 and older only)"
 else

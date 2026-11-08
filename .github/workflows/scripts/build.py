@@ -118,10 +118,10 @@ def parse_args() -> argparse.Namespace:
                              "chroot, so a full distro can run its own init (systemd/OpenRC). Only wired up "
                              "for kernel 5.10/5.15/6.1 (android12/13/14) so far.")
     parser.add_argument("--droidspaces-pids", action="store_true",
-                        help="EXPERIMENTAL, needs --droidspaces, android13-5.15 only: enable "
-                             "CONFIG_CGROUP_PIDS (Droidspaces --pids-limit) by giving pids the cgroup "
-                             "id of net_prio (turned off), so the GKI kABI does not move. Test builds "
-                             "only until proven on the device.")
+                        help="Needs --droidspaces, android13-5.15 only (other branches skip it): "
+                             "enable CONFIG_CGROUP_PIDS (Droidspaces --pids-limit) by giving pids the "
+                             "cgroup id of net_prio (turned off), so the GKI kABI does not move. "
+                             "build-kernel.sh and the workflows turn it on by default.")
     parser.add_argument("--op8e", action="store_true")
     parser.add_argument("--extra-net", action="store_true",
                         help="Enable the optional networking config set: IPv6 NAT "

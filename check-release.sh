@@ -1128,14 +1128,6 @@ echo "    --susfs-commit $SUSFS_USE \\"
 echo "    --ksu-version-code $CAND_CODE${KPM_ARG}${AWG_ARG}${N}"
 echo
 echo "  $MENU"
-if [ "$BRANCH" = "gki-android13-5.15" ]; then
-    echo
-    echo "  ${Y}Experimental${N} - same build plus Droidspaces --pids-limit (CONFIG_CGROUP_PIDS"
-    echo "  via the net_prio slot swap). Test builds only, files get a \"-pids\" marker:"
-    echo "  ${C}./build-kernel.sh --ksu-commit $CAND_SHA \\"
-    echo "    --susfs-commit $SUSFS_USE \\"
-    echo "    --ksu-version-code $CAND_CODE --pids${KPM_ARG}${AWG_ARG}${N}"
-fi
 
 if [ "$KSU_NEW" = 1 ] || [ "$SUSFS_NEW" = 1 ] || [ "$AWG_NEW" = 1 ]; then
     [ "$CAND_CODE" != "<manager version>" ] && \

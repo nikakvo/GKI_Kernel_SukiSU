@@ -483,27 +483,27 @@ else
         "CONFIG_MACVLAN not enabled - builds before v40993 did not include it"
 fi
 
-# --pids-limit. Experimental opt-in build (--droidspaces-pids): pids takes
+# --pids-limit (--droidspaces-pids, default since 2026-11): pids takes
 # net_prio's cgroup id, so CONFIG_CGROUP_NET_PRIO must be off with it.
 if cfg_is CONFIG_CGROUP_PIDS y; then
     if cfg_is CONFIG_CGROUP_NET_PRIO y; then
-        row bad "Droidspaces pids limit (experimental)" \
+        row bad "Droidspaces pids limit" \
             "CONFIG_CGROUP_PIDS=y together with CONFIG_CGROUP_NET_PRIO=y - one cgroup subsystem too many for the GKI kABI"
     elif [ -r /sys/fs/cgroup/cgroup.controllers ]; then
         if grep -qw pids /sys/fs/cgroup/cgroup.controllers 2>/dev/null; then
-            row ok "Droidspaces pids limit (experimental)" \
+            row ok "Droidspaces pids limit" \
                 "CONFIG_CGROUP_PIDS=y; pids listed in /sys/fs/cgroup/cgroup.controllers"
         else
-            row bad "Droidspaces pids limit (experimental)" \
+            row bad "Droidspaces pids limit" \
                 "CONFIG_CGROUP_PIDS=y but pids is not in /sys/fs/cgroup/cgroup.controllers"
         fi
     else
-        row ok "Droidspaces pids limit (experimental)" \
+        row ok "Droidspaces pids limit" \
             "CONFIG_CGROUP_PIDS=y (cgroup v2 root not readable - runtime test skipped)"
     fi
 else
-    row off "Droidspaces pids limit (experimental)" \
-        "CONFIG_CGROUP_PIDS not enabled - opt-in test builds only (--droidspaces-pids)"
+    row off "Droidspaces pids limit" \
+        "CONFIG_CGROUP_PIDS not enabled - older build, or built with --no-pids"
 fi
 
 if [ -e /dev/ntsync ]; then

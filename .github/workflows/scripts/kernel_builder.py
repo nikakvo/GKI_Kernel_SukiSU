@@ -1985,7 +1985,8 @@ CONFIG_CIFS_XATTR=y
             #   CGROUP_SUBSYS_COUNT grows and the subsys[] / e_csets[] arrays
             #   in struct css_set and struct cgroup (both in the KMI) change
             #   size, shifting every field after them for vendor modules.
-            #   Opt-in workaround: --droidspaces-pids (apply_droidspaces_pids_slot).
+            #   Workaround: --droidspaces-pids (apply_droidspaces_pids_slot),
+            #   on by default in build-kernel.sh and the workflows since 2026-11.
             # - CONFIG_CFS_BANDWIDTH (--cpus): adds fields to struct cfs_rq,
             #   which is embedded in struct rq, so the layout of struct rq
             #   changes - vendor scheduler modules (WALT etc.) read it directly.
@@ -2028,7 +2029,8 @@ CONFIG_CIFS_XATTR=y
         return lambda sym: state.get(sym, False)
 
     def apply_droidspaces_pids_slot(self):
-        """Opt-in (--droidspaces-pids): CONFIG_CGROUP_PIDS for Droidspaces'
+        """--droidspaces-pids (default on in build-kernel.sh and the workflows
+        since 2026-11): CONFIG_CGROUP_PIDS for Droidspaces'
         --pids-limit without breaking the GKI kABI.
 
         A plain CONFIG_CGROUP_PIDS=y adds an 8th cgroup subsystem, which
@@ -4973,8 +4975,8 @@ CONFIG_CIFS_XATTR=y
         suffix = ""
         if (self.work_dir / "build/build.sh").exists() and self.config.lto_mode == "full":
             suffix = "-lto-full"
-        # Experimental pids slot-swap builds must never be mistaken for a
-        # normal release build.
+        # Marks builds with the pids slot swap (the default since 2026-11),
+        # so a --no-pids test build can be told apart by its file names.
         if self.patch_status.get("droidspaces_pids", {}).get("status") == "applied":
             suffix += "-pids"
         return suffix
