@@ -62,8 +62,18 @@ on:
         required: true
         type: boolean
         default: true
+      droidspaces_pids:
+        description: 'EXPERIMENTAL: also Droidspaces --pids-limit (CONFIG_CGROUP_PIDS via the net_prio slot swap) - android13-5.15 with Droidspaces only, other branches skip it. Files get a "-pids" marker.'
+        required: true
+        type: boolean
+        default: false
+      amneziawg:
+        description: 'Build AmneziaWG in next to WireGuard (pinned commit from config.py) - android13-5.15 only, other branches skip it by themselves.'
+        required: true
+        type: boolean
+        default: true
       hide_stuff:
-        description: 'Apply 69_hide_stuff.patch (LineageOS/jit-zygote-cache path spoofing) - currently stale against susfs4ksu and fails the build; uncheck to skip it until ShirkNeko/SukiSU_patch fixes it'
+        description: 'Apply 69_hide_stuff.patch from SukiSU_patch (LineageOS/jit-zygote-cache path spoofing). On in local builds too; if it ever stops applying, PATCH_STATUS shows it as failed.'
         required: true
         type: boolean
         default: true
@@ -152,7 +162,11 @@ jobs:
       SCRIPTS_DIR: ./.github/workflows/scripts
     steps:
       - name: Maximize build space
-        uses: AdityaGarg8/remove-unwanted-software@v5
+        # v5.1: v5 tried to remove the 'powershell' package, which newer
+        # ubuntu-latest images no longer have, and failed the whole job in
+        # its first step. A cleanup problem must never stop a build.
+        uses: AdityaGarg8/remove-unwanted-software@v5.1
+        continue-on-error: true
         with:
           remove-dotnet: 'true'
           remove-android: 'true'
@@ -174,15 +188,22 @@ jobs:
       - name: Install dependencies
         run: |
           sudo apt update && sudo apt upgrade -y
-          sudo apt install -y ccache python3 git curl wget zip unzip xz-utils openssl pixz build-essential zlib1g-dev
+          sudo apt install -y ccache python3 git curl wget zip unzip xz-utils openssl pixz build-essential zlib1g-dev bc bison flex libssl-dev libelf-dev rsync
           pip install PyYAML
 
       - name: Setup AVB signing key
         env:
           BOOT_SIGN_KEY: ${{ secrets.BOOT_SIGN_KEY }}
         run: |
+          # Forks don't have this secret. An empty key file made avbtool
+          # fail at the very end of the build, so without the secret the
+          # builder now generates its own throwaway key instead.
+          if [ -z "$BOOT_SIGN_KEY" ]; then
+            echo "::notice::No BOOT_SIGN_KEY secret - boot.img gets signed with a key generated for this run."
+            exit 0
+          fi
           mkdir -p toolchain/linux-x86/bin
-          echo "$BOOT_SIGN_KEY" > toolchain/linux-x86/bin/testkey.pem
+          printf '%s\n' "$BOOT_SIGN_KEY" > toolchain/linux-x86/bin/testkey.pem
           echo "BOOT_SIGN_KEY_PATH=$GITHUB_WORKSPACE/toolchain/linux-x86/bin/testkey.pem" >> $GITHUB_ENV
 
       - name: Configure ccache
@@ -223,6 +244,13 @@ jobs:
           [ "${{ github.event.inputs.use_ntsync }}" = "false" ] && ARGS="$ARGS --no-ntsync"
           [ "${{ github.event.inputs.BBG }}" = "true" ] && ARGS="$ARGS --bbg"
           [ "${{ github.event.inputs.DROIDSPACES }}" = "true" ] && ARGS="$ARGS --droidspaces"
+          [ "${{ github.event.inputs.droidspaces_pids }}" = "true" ] && ARGS="$ARGS --droidspaces-pids"
+          [ "${{ github.event.inputs.amneziawg }}" = "true" ] && ARGS="$ARGS --amneziawg"
+          # ath9k_htc: its patch exists only for android13-5.15 (same as
+          # local builds, where it is on by default for that branch).
+          if [ "${{ matrix.config.android }}" = "android13" ] && [ "${{ matrix.config.kernel }}" = "5.15" ]; then
+            ARGS="$ARGS --ath9k"
+          fi
           [ "${{ github.event.inputs.hide_stuff }}" = "false" ] && ARGS="$ARGS --no-hide-stuff"
           [ "${{ github.event.inputs.extra_net }}" = "true" ] && ARGS="$ARGS --extra-net"
 
@@ -263,6 +291,7 @@ jobs:
           mkdir -p artifacts
           find /tmp/gki-build -name "*AnyKernel3*.zip" -type f -exec cp {} artifacts/ \;
           find /tmp/gki-build -name "*-boot.img" -type f -exec cp {} artifacts/ \;
+          find /tmp/gki-build -path "*/ath9k-modules/*.ko" -type f -exec cp {} artifacts/ \;
           if [ -z "$(ls -A artifacts/)" ]; then
             echo "No build artifacts found"
             echo "artifacts_exist=false" >> $GITHUB_OUTPUT

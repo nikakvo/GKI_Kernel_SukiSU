@@ -1,5 +1,17 @@
 name: Kernel Build
 
+# One kernel, picked by hand. With every field left as it is, this builds
+# the same kernel as ./build-kernel.sh with no flags in WSL (menu option 1):
+# android13-5.15.223 (LTS merge 2316d138, resolved from matrix.json),
+# the known-good SukiSU / susfs / AmneziaWG pins from config.py, KPM,
+# ZRAM, MGLRU, PSI, NTSync, Baseband-guard, Droidspaces, extra networking,
+# BBRv3, AmneziaWG and the ath9k_htc modules (android13-5.15 only).
+# One difference that cannot be avoided: LTO is thin here (full LTO needs
+# ~27 GB RAM, more than a GitHub runner has).
+#
+# Not sure the pins still fit upstream? Run "Check Release" first - it is
+# the same check as ./check-release.sh and tells you what to put here.
+
 permissions:
   contents: write
   actions: write
@@ -31,7 +43,7 @@ on:
         description: 'Sub Level Version'
         required: true
         type: string
-        default: '216'
+        default: '223'
       os_patch_level:
         description: 'OS Patch Level'
         required: true
@@ -102,13 +114,23 @@ on:
         required: true
         type: boolean
         default: true
+      droidspaces_pids:
+        description: 'EXPERIMENTAL: also Droidspaces --pids-limit (CONFIG_CGROUP_PIDS via the net_prio slot swap) - android13-5.15 with Droidspaces only. Same as ./build-kernel.sh --pids; files get a "-pids" marker.'
+        required: true
+        type: boolean
+        default: false
+      amneziawg:
+        description: 'Build AmneziaWG in next to WireGuard (pinned commit from config.py) - android13-5.15 only, other branches skip it by themselves. Use it with WG Shield 2.0+.'
+        required: true
+        type: boolean
+        default: true
       supp_op:
         description: 'Enable OnePlus 8E support'
         required: true
         type: boolean
         default: false
       hide_stuff:
-        description: 'Apply 69_hide_stuff.patch (LineageOS/jit-zygote-cache path spoofing) - currently stale against susfs4ksu and fails the build; uncheck to skip it until ShirkNeko/SukiSU_patch fixes it'
+        description: 'Apply 69_hide_stuff.patch from SukiSU_patch (LineageOS/jit-zygote-cache path spoofing). On in local builds too; if it ever stops applying, PATCH_STATUS shows it as failed.'
         required: true
         type: boolean
         default: true
@@ -145,7 +167,13 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Maximize build space
-        uses: AdityaGarg8/remove-unwanted-software@v5
+        # v5.1: v5 tried to remove the 'powershell' package, which newer
+        # ubuntu-latest images no longer have, and failed the whole job in
+        # its first step (this is what broke the builds in forks).
+        # continue-on-error: a cleanup problem must never stop a build -
+        # the runner has enough disk for one thin-LTO kernel without it.
+        uses: AdityaGarg8/remove-unwanted-software@v5.1
+        continue-on-error: true
         with:
           remove-dotnet: 'true'
           remove-android: 'true'
@@ -167,15 +195,22 @@ jobs:
       - name: Install dependencies
         run: |
           sudo apt update && sudo apt upgrade -y
-          sudo apt install -y ccache python3 git curl wget zip unzip build-essential zlib1g-dev
+          sudo apt install -y ccache python3 git curl wget zip unzip xz-utils openssl pixz build-essential zlib1g-dev bc bison flex libssl-dev libelf-dev rsync
           pip install PyYAML
 
       - name: Setup AVB signing key
         env:
           BOOT_SIGN_KEY: ${{ secrets.BOOT_SIGN_KEY }}
         run: |
+          # Forks don't have this secret. An empty key file made avbtool
+          # fail at the very end of the build, so without the secret the
+          # builder now generates its own throwaway key instead.
+          if [ -z "$BOOT_SIGN_KEY" ]; then
+            echo "::notice::No BOOT_SIGN_KEY secret - boot.img gets signed with a key generated for this run."
+            exit 0
+          fi
           mkdir -p toolchain/linux-x86/bin
-          echo "$BOOT_SIGN_KEY" > toolchain/linux-x86/bin/testkey.pem
+          printf '%s\n' "$BOOT_SIGN_KEY" > toolchain/linux-x86/bin/testkey.pem
           echo "BOOT_SIGN_KEY_PATH=$GITHUB_WORKSPACE/toolchain/linux-x86/bin/testkey.pem" >> $GITHUB_ENV
 
       - name: Configure ccache
@@ -250,6 +285,15 @@ jobs:
           [ "${{ github.event.inputs.use_ntsync }}" = "false" ] && ARGS="$ARGS --no-ntsync"
           [ "${{ github.event.inputs.BBG }}" = "true" ] && ARGS="$ARGS --bbg"
           [ "${{ github.event.inputs.DROIDSPACES }}" = "true" ] && ARGS="$ARGS --droidspaces"
+          [ "${{ github.event.inputs.droidspaces_pids }}" = "true" ] && ARGS="$ARGS --droidspaces-pids"
+          [ "${{ github.event.inputs.amneziawg }}" = "true" ] && ARGS="$ARGS --amneziawg"
+          # ath9k_htc (TL-WN722N v1 over OTG) is on by default in local
+          # builds; its patch exists only for android13-5.15, so it is
+          # turned on for that branch only (no input - 25 is GitHub's max).
+          if [ "${{ github.event.inputs.android_version }}" = "android13" ] && \
+             [ "${{ github.event.inputs.kernel_version }}" = "5.15" ]; then
+            ARGS="$ARGS --ath9k"
+          fi
           [ "${{ github.event.inputs.supp_op }}" = "true" ] && ARGS="$ARGS --op8e"
           [ "${{ github.event.inputs.hide_stuff }}" = "false" ] && ARGS="$ARGS --no-hide-stuff"
           [ "${{ github.event.inputs.extra_net }}" = "true" ] && ARGS="$ARGS --extra-net"
@@ -272,6 +316,10 @@ jobs:
           mkdir -p artifacts
           find /tmp/gki-build -name "*AnyKernel3*.zip" -type f -exec cp {} artifacts/ \;
           find /tmp/gki-build -name "*-boot.img" -type f -exec cp {} artifacts/ \;
+          # ath9k_htc modules (android13-5.15) and the build reports, like
+          # the files attached to the releases.
+          find /tmp/gki-build -path "*/ath9k-modules/*.ko" -type f -exec cp {} artifacts/ \;
+          find /tmp/gki-build -maxdepth 2 \( -name "PATCH_STATUS.json" -o -name "BUILD_REPORT.txt" \) -type f -exec cp {} artifacts/ \;
 
       - name: Patch status summary
         run: |
