@@ -172,7 +172,7 @@ cd GKI_Kernel_SukiSU
 ./cleanup-workspace.sh       # free disk space between builds
 ```
 
-Every build starts from a clean tree: if `~/gki-workspace/<android>-<kernel>-<sub_level>` still holds a previous (or interrupted) build, it is deleted first, and that build's zips, boot images and `ath9k-modules/` are moved to `~/gki-workspace/previous-<android>-<kernel>-<sub_level>/` (only the last one is kept). `cleanup-workspace.sh` is still there to free the disk space by hand.
+Every build starts from a clean tree: if `~/gki-workspace/<android>-<kernel>-<sub_level>` still holds a previous (or interrupted) build, it is deleted first, and that build's zips, boot images and `ath9k-modules/` are moved to `~/gki-workspace/previous-<android>-<kernel>-<sub_level>/` (only the last one is kept). `cleanup-workspace.sh` is still there to free the disk space by hand. After a successful build, the same folder also holds everything a release needs: the boot image, the AnyKernel3 zip, the flashable `ath9k_htc_vermeer.zip` (packed by `ath9k-module/make-ath9k-module.sh`), `check-features.sh`, a copy of the build log, `PATCH_STATUS.json` and `BUILD_REPORT.txt`.
 
 With no flags it builds **exactly the SukiSU-Ultra / SUSFS combination of the latest release**. The pins live at the top of `.github/workflows/scripts/config.py`.
 

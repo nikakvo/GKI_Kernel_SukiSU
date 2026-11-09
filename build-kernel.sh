@@ -557,13 +557,37 @@ python3 build.py \
 BUILD_RC="${PIPESTATUS[0]}"
 
 OUT_DIR="$WORKSPACE/${ANDROID_VERSION}-${KERNEL_VERSION}-${SUB_LEVEL}"
+
+# Everything that goes into a release ends up in OUT_DIR, so it can be
+# copied from one place: the ath9k_htc flashable module (same script as
+# by hand, ath9k-module/make-ath9k-module.sh), a copy of the build log
+# and check-features.sh. Only after a successful build. A problem here
+# is a warning - the kernel itself is already built.
+if [ "$BUILD_RC" -eq 0 ] && [ -d "$OUT_DIR" ]; then
+    if [ -n "$ATH9K" ] && [ -d "$OUT_DIR/ath9k-modules" ]; then
+        echo ""
+        echo "=== Packaging the ath9k_htc module ==="
+        if (cd "$SCRIPT_DIR/ath9k-module" && \
+            bash ./make-ath9k-module.sh "$OUT_DIR/ath9k-modules" \
+                "$SCRIPT_DIR/.github/workflows/scripts/firmware/ath9k_htc/htc_9271-1.4.0.fw") && \
+           mv -f "$SCRIPT_DIR/ath9k-module/ath9k_htc_vermeer.zip" "$OUT_DIR/"; then
+            :
+        else
+            echo "WARNING: ath9k_htc module packaging failed - run ath9k-module/make-ath9k-module.sh by hand"
+        fi
+    fi
+    cp -f "$LOGFILE" "$OUT_DIR/" 2>/dev/null || true
+    cp -f "$SCRIPT_DIR/check-features.sh" "$OUT_DIR/" 2>/dev/null || true
+fi
+
 echo ""
 echo "Build log saved to: $LOGFILE"
 echo "Artifacts in: $OUT_DIR"
 if [ -d "$OUT_DIR" ]; then
     # Both the boot.img and the AnyKernel3 zip land here now (the zip
     # used to be written one directory up, into $WORKSPACE).
-    find "$OUT_DIR" -maxdepth 1 \( -name '*-boot.img' -o -name '*AnyKernel3*.zip' \) \
+    find "$OUT_DIR" -maxdepth 1 \( -name '*-boot.img' -o -name '*AnyKernel3*.zip' \
+        -o -name 'ath9k_htc_vermeer.zip' -o -name 'build-*.log' -o -name 'check-features.sh' \) \
         -printf '  %f\n' 2>/dev/null | sort
     for f in PATCH_STATUS.json BUILD_REPORT.txt; do
         [ -f "$OUT_DIR/$f" ] && echo "  $f"
