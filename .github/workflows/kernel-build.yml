@@ -316,9 +316,16 @@ jobs:
           mkdir -p artifacts
           find /tmp/gki-build -name "*AnyKernel3*.zip" -type f -exec cp {} artifacts/ \;
           find /tmp/gki-build -name "*-boot.img" -type f -exec cp {} artifacts/ \;
-          # ath9k_htc modules (android13-5.15) and the build reports, like
-          # the files attached to the releases.
-          find /tmp/gki-build -path "*/ath9k-modules/*.ko" -type f -exec cp {} artifacts/ \;
+          # ath9k_htc (android13-5.15): package the flashable root module
+          # the same way as locally (ath9k-module/make-ath9k-module.sh),
+          # instead of shipping the four loose .ko files.
+          ATH9K_DIR=$(find /tmp/gki-build -maxdepth 2 -type d -name ath9k-modules | head -n1)
+          if [ -n "$ATH9K_DIR" ]; then
+            (cd ath9k-module && bash ./make-ath9k-module.sh "$ATH9K_DIR" \
+              "$GITHUB_WORKSPACE/.github/workflows/scripts/firmware/ath9k_htc/htc_9271-1.4.0.fw")
+            cp ath9k-module/ath9k_htc_vermeer.zip artifacts/
+          fi
+          # The build reports, like the files attached to the releases.
           find /tmp/gki-build -maxdepth 2 \( -name "PATCH_STATUS.json" -o -name "BUILD_REPORT.txt" \) -type f -exec cp {} artifacts/ \;
 
       - name: Patch status summary
