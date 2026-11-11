@@ -85,6 +85,7 @@ fi
 ok()   { echo "  ${G}OK${N}    $*"; }
 warn() { echo "  ${Y}WARN${N}  $*"; }
 bad()  { echo "  ${R}STOP${N}  $*"; }
+info() { echo "  ${C}INFO${N}  $*"; }
 # a combination that was tried and doesn't fit - not the final verdict
 tried() { echo "  ${Y}NO FIT${N} $*"; }
 hdr()  { echo; echo "${B}=== $* ===${N}"; }
@@ -418,26 +419,20 @@ PY
     return 0
 }
 
-# Walk back from HEAD through commits that are only re-bases and take the
-# oldest one with HEAD's code: the pin itself if nothing real changed, or
-# e.g. 2ad29735 instead of 054b2432 when only a re-base came after it.
-if [ -z "$SUSFS_FORCE" ] && [ -n "$SUSFS_PIN" ] && [ "$SUSFS_HEAD" != "$SUSFS_PIN_K" ]; then
-    SUSFS_CODE_OF="$SUSFS_HEAD"
-    while read -r c; do
-        [ -n "$c" ] || continue
-        p="$(sha_of "$SUSFS" "$c^")"
-        [ -n "$p" ] && susfs_same_code "$p" "$SUSFS_CODE_OF" || break
-        SUSFS_HEAD="$p"
-    done < <(git -C "$SUSFS" rev-list --first-parent "$SUSFS_PIN_K..$SUSFS_CODE_OF" 2>/dev/null)
-    if [ "$SUSFS_HEAD" != "$SUSFS_CODE_OF" ]; then
-        echo
-        ok "susfs ${SUSFS_CODE_OF:0:8} only re-bases its patches (line numbers / context)."
-        if [ "$SUSFS_HEAD" = "$SUSFS_PIN_K" ]; then
-            echo "        No new code - keeping the known-good susfs ${SUSFS_HEAD:0:8}."
-        else
-            echo "        Using ${SUSFS_HEAD:0:8} instead: same code as HEAD, older patch context."
-        fi
-        echo "        A re-based patch can stop fitting our kernel sub_level."
+# Always the newest susfs: susfs only moves forward, and a re-base of the
+# KernelSU patch (10_) is what makes it fit the newest SukiSU. Until
+# 2026-11-11 this walked back to the oldest commit with the same code; that
+# kept the known-good pin on every "Sync with upstream" re-base. Now it only
+# says so - the patch test below decides, the build is the real test.
+if [ -z "$SUSFS_FORCE" ] && [ -n "$SUSFS_PIN" ] && [ "$SUSFS_HEAD" != "$SUSFS_PIN_K" ] && \
+   susfs_same_code "$SUSFS_PIN_K" "$SUSFS_HEAD"; then
+    echo
+    info "susfs ${SUSFS_HEAD:0:8} only re-bases its patches (line numbers / context),"
+    echo "        no new code. Using it anyway - always the newest susfs."
+    if ! git -C "$SUSFS" diff --quiet "$SUSFS_PIN_K" "$SUSFS_HEAD" -- \
+         "kernel_patches/50_add_susfs_in_${BRANCH}.patch" 2>/dev/null; then
+        echo "        Its kernel-side patch (50_) moved too: check-release does not test it,"
+        echo "        the build does (it stops if a hunk does not fit the kernel commit)."
     fi
 fi
 
@@ -1076,6 +1071,24 @@ case "$BRANCH" in
     gki-android13-5.15) EXTRA=""; MENU="menu option 1 (or pick a newer 5.15 sub_level)" ;;
     *)                  EXTRA="--no-ath9k "; MENU="menu option 2 (Custom), values from matrix.json" ;;
 esac
+# Kernel commit menu option 1 builds: the matrix.json row of build-kernel.sh's
+# SUB_LEVEL (update_matrix.py keeps it on the newest commit for that sub_level).
+if [ "$BRANCH" = "gki-android13-5.15" ]; then
+    DEF_SUB="$(sed -n 's/^SUB_LEVEL="\([0-9]*\)".*/\1/p' "$SCRIPT_DIR/build-kernel.sh" 2>/dev/null | head -n 1)"
+    DEF_TAG="$(python3 - "$SCRIPT_DIR/.github/workflows/config/matrix.json" "$DEF_SUB" <<'PY' 2>/dev/null
+import json, sys
+try:
+    rows = json.load(open(sys.argv[1])).get("android13-5.15", [])
+except Exception:
+    sys.exit(0)
+rows = [r for r in rows if str(r.get("sub_level")) == sys.argv[2] and r.get("enabled")]
+if len(rows) == 1:
+    print(rows[0].get("kernel_tag", ""))
+PY
+)"
+    [ -n "$DEF_TAG" ] && \
+        MENU="menu option 1: kernel 5.15.$DEF_SUB @ ${DEF_TAG:0:12} (matrix.json - run update_matrix.py first for the newest)"
+fi
 
 if [ "$VERDICT" != "STOP" ] && grep -qF "$CAND_SHA $SUSFS_USE " "$BROKEN" 2>/dev/null; then
     VERDICT="STOP"

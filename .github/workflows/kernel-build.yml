@@ -2,7 +2,7 @@ name: Kernel Build
 
 # One kernel, picked by hand. With every field left as it is, this builds
 # the same kernel as ./build-kernel.sh with no flags in WSL (menu option 1):
-# android13-5.15.223 (LTS merge 2316d138, resolved from matrix.json),
+# android13-5.15.223 (newest commit for 223 from matrix.json, update_matrix.py moves it),
 # the known-good SukiSU / susfs / AmneziaWG pins from config.py, KPM,
 # ZRAM, MGLRU, PSI, NTSync, Baseband-guard, Droidspaces (with pids), extra networking,
 # BBRv3, AmneziaWG and the ath9k_htc modules (android13-5.15 only).

@@ -203,7 +203,7 @@ After you build, flash and test, run it again and answer `1` to save the new pin
 
 The **Kernel Build** (one version) and **Build Kernels** (whole matrix) workflows use the same pins when their inputs are left empty. With all its fields left as they are, **Kernel Build** builds the same kernel as `./build-kernel.sh` with no flags (android13-5.15.223, AmneziaWG, ath9k_htc modules included). CI builds **Thin LTO** (Full LTO needs ~27 GB RAM), so they are not the tested release binaries. The **Check Release** workflow runs `check-release.sh` and writes on its Summary page what to put into Kernel Build for the newest commits that fit.
 
-Kernel versions and Google tags come from `.github/workflows/config/matrix.json`, kept current by `update_matrix.py` and the scheduled **update-matrix** workflow.
+Kernel versions and Google tags come from `.github/workflows/config/matrix.json`, kept current by `update_matrix.py` and the scheduled **update-matrix** workflow. A sub_level that has no Google tag yet (like 223) is pinned to the newest commit for it on the `-lts` branch, and the default build uses that commit.
 
 ---
 

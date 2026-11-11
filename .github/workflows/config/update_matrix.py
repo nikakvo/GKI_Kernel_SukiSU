@@ -27,6 +27,8 @@ officially tagged one, this script adds an entry pinned to a commit SHA
 merge plus any ANDROID: fixups that followed it). kernel_builder.py
 already accepts a SHA as kernel_tag. Once Google publishes the real
 _r00 tag for that sub_level, the entry is upgraded to it automatically.
+Such SHA entries always move to the newest commit for their sub_level,
+enabled ones too (the default build reads its kernel_tag from here).
 This uses a small local partial clone (commits + trees, no file
 contents) in .ack-cache/ next to this script, refreshed on every run.
 
@@ -503,20 +505,19 @@ def main():
                     continue  # already on an official tag - that always wins
                 if sha.lower().startswith(old_tag.lower()):
                     continue  # same commit (possibly pinned as a short SHA)
-                if existing.get("enabled"):
-                    # Don't silently move something you've opted into building.
-                    warnings.append(
-                        f"{matrix_key} sub_level {sub_level}: enabled and pinned to {old_tag[:12]}, "
-                        f"but {lts_branch} now has newer commits for this sub_level "
-                        f"(tip {sha[:12]}) - left unchanged, update manually if wanted"
-                    )
-                else:
-                    changes.append(
-                        f"~ UPDATED: {matrix_key} sub_level {sub_level} (LTS, untagged): "
-                        f"commit {old_tag[:12]}->{sha[:12]} (enabled stays: False)"
-                    )
-                    existing["kernel_tag"] = sha
-                    existing["lts"] = True
+                # Untagged sub_levels always follow the newest commit of the
+                # -lts branch for that sub_level (the LTS merge plus the
+                # ANDROID: fixes after it), enabled entries too - the default
+                # build (build-kernel.sh menu 1, Kernel Build workflow) reads
+                # its kernel_tag from here. Until 2026-11-11 enabled entries
+                # were left on the old commit with a warning.
+                changes.append(
+                    f"~ UPDATED: {matrix_key} sub_level {sub_level} (LTS, untagged): "
+                    f"commit {old_tag[:12]}->{sha[:12]} "
+                    f"(enabled stays: {existing.get('enabled', False)})"
+                )
+                existing["kernel_tag"] = sha
+                existing["lts"] = True
 
         entries.sort(key=lambda e: (e["os_patch_level"], int(e["sub_level"]) if str(e["sub_level"]).isdigit() else 0))
 

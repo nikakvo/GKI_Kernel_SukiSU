@@ -196,6 +196,9 @@ OS_PATCH="2026-09"
 # android.googlesource.com/kernel/common. This is the SHA of the 223 tree
 # (LTS merge, same as matrix.json) that has been built and confirmed
 # booting on device.
+# Since 2026-11-11 the default build takes the commit from matrix.json
+# (see "Default kernel commit from matrix.json" below); this value is only
+# the fallback when matrix.json can't be read.
 # NOTE: this is the KERNEL source ref - do NOT paste a susfs4ksu commit
 # here. They are different repositories; the build will fail with an
 # HTTP 500 from googlesource if they get swapped.
@@ -353,13 +356,42 @@ check_dependencies() {
 
 check_dependencies
 
+# ---- Default kernel commit from matrix.json ----
+# The default build uses the matrix.json entry of SUB_LEVEL (enabled, one
+# match): update_matrix.py keeps an untagged LTS sub_level on the newest
+# commit of android13-5.15-lts for it, so this is always the newest 223.
+# The KERNEL_TAG / OS_PATCH / IS_LTS values above are only the fallback
+# when matrix.json can't be read.
+KERNEL_TAG_SRC="build-kernel.sh fallback"
+if [ -f "$MATRIX_FILE" ] && command -v python3 >/dev/null 2>&1; then
+    MATRIX_ROW="$(python3 - "$MATRIX_FILE" "$ANDROID_VERSION-$KERNEL_VERSION" "$SUB_LEVEL" <<'PY'
+import json, sys
+path, key, sub = sys.argv[1:]
+try:
+    rows = json.load(open(path)).get(key, [])
+except Exception:
+    sys.exit(0)
+rows = [r for r in rows if str(r.get("sub_level")) == sub and r.get("enabled") and r.get("kernel_tag")]
+if len(rows) == 1:
+    r = rows[0]
+    print(r["kernel_tag"], r.get("os_patch_level") or "-", "1" if r.get("lts") else "0")
+PY
+)"
+    if [ -n "$MATRIX_ROW" ]; then
+        read -r KERNEL_TAG M_OS_PATCH M_LTS <<< "$MATRIX_ROW"
+        [ "$M_OS_PATCH" != "-" ] && OS_PATCH="$M_OS_PATCH"
+        if [ "$M_LTS" = "1" ]; then IS_LTS="1"; else IS_LTS=""; fi
+        KERNEL_TAG_SRC="matrix.json"
+    fi
+fi
+
 # ============================================================
 #  Build menu
 # ============================================================
 echo "========================================"
 echo "  GKI KernelSU SUSFS - Build Menu"
 echo "========================================"
-echo "1) Default (android13 / 5.15 / 223 / 2026-09)"
+echo "1) Default ($ANDROID_VERSION / $KERNEL_VERSION / $SUB_LEVEL / $OS_PATCH, kernel ${KERNEL_TAG:0:12} from $KERNEL_TAG_SRC)"
 echo "2) Custom (choose your own versions)"
 echo "3) All versions from matrix.json"
 echo "========================================"
