@@ -391,7 +391,9 @@ fi
 echo "========================================"
 echo "  GKI KernelSU SUSFS - Build Menu"
 echo "========================================"
-echo "1) Default ($ANDROID_VERSION / $KERNEL_VERSION / $SUB_LEVEL / $OS_PATCH, kernel ${KERNEL_TAG:0:12} from $KERNEL_TAG_SRC)"
+# A raw commit SHA is shortened to 12 characters, a tag name is shown whole.
+if [[ "$KERNEL_TAG" =~ ^[0-9a-f]{40}$ ]]; then KERNEL_TAG_SHOW="${KERNEL_TAG:0:12}"; else KERNEL_TAG_SHOW="$KERNEL_TAG"; fi
+echo "1) Default ($ANDROID_VERSION / $KERNEL_VERSION / $SUB_LEVEL / $OS_PATCH, kernel $KERNEL_TAG_SHOW from $KERNEL_TAG_SRC)"
 echo "2) Custom (choose your own versions)"
 echo "3) All versions from matrix.json"
 echo "========================================"

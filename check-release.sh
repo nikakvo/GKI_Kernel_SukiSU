@@ -1087,7 +1087,9 @@ if len(rows) == 1:
 PY
 )"
     [ -n "$DEF_TAG" ] && \
-        MENU="menu option 1: kernel 5.15.$DEF_SUB @ ${DEF_TAG:0:12} (matrix.json - run update_matrix.py first for the newest)"
+        # A raw commit SHA is shortened to 12 characters, a tag name is shown whole.
+        if [[ "$DEF_TAG" =~ ^[0-9a-f]{40}$ ]]; then DEF_TAG_SHOW="${DEF_TAG:0:12}"; else DEF_TAG_SHOW="$DEF_TAG"; fi
+        MENU="menu option 1: kernel 5.15.$DEF_SUB @ $DEF_TAG_SHOW (matrix.json - run update_matrix.py first for the newest)"
 fi
 
 if [ "$VERDICT" != "STOP" ] && grep -qF "$CAND_SHA $SUSFS_USE " "$BROKEN" 2>/dev/null; then
