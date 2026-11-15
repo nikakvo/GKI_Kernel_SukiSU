@@ -664,7 +664,7 @@ CONFIG_CIFS_XATTR=y
                 f"the per-branch form to cover several branches in one run:\n"
                 f"  --susfs-commit '{branch}=<ref>,gki-android13-5.15=<ref>'\n"
                 f"Browse the branch at: "
-                f"https://github.com/ShirkNeko/susfs4ksu/commits/{branch}"
+                f"https://gitlab.com/simonpunk/susfs4ksu/-/commits/{branch}"
             )
 
         return sha
@@ -833,6 +833,16 @@ CONFIG_CIFS_XATTR=y
                     # the right one before continuing, instead of silently
                     # using whatever happens to be checked out.
                     self._chdir(repo_dir)
+                    # A reused clone keeps the URL it was cloned from. When a
+                    # remote moves (ShirkNeko's susfs4ksu mirror was removed
+                    # on 2026-11-15, GitLab is used now) re-point origin, or
+                    # every later build fails on this fetch.
+                    cur = self._run_cmd("git remote get-url origin",
+                                        check=False, capture_output=True)
+                    cur_url = (cur.stdout or "").strip()
+                    if cur_url != url:
+                        logger.info(f"{name}: origin {cur_url or '(none)'} -> {url}")
+                        self._run_cmd(f"git remote set-url origin {url}", check=False)
                     fetch_result = self._run_cmd(f"git fetch origin {branch}", check=False)
                     self._run_cmd(f"git checkout {branch}", check=False)
                     self._run_cmd(f"git reset --hard origin/{branch}", check=False)
@@ -2574,7 +2584,7 @@ CONFIG_CIFS_XATTR=y
                 f"The susfs4ksu checkout (at {self.susfs_dir}) may be on the "
                 f"wrong branch (expected '{self.config.kernel_branch}'), or "
                 f"susfs4ksu has renamed/moved this file upstream. Check: "
-                f"https://github.com/ShirkNeko/susfs4ksu/tree/{self.config.kernel_branch}/kernel_patches\n"
+                f"https://gitlab.com/simonpunk/susfs4ksu/-/tree/{self.config.kernel_branch}/kernel_patches\n"
                 f"This is a hard stop - continuing without this patch produces "
                 f"a kernel that fails to link (undefined susfs_* symbols)."
             )
@@ -2761,7 +2771,7 @@ CONFIG_CIFS_XATTR=y
             raise RuntimeError(
                 f"SUSFS<->KernelSU integration patch not found: {patch_file}\n"
                 f"susfs4ksu may have renamed/moved this file upstream. Check: "
-                f"https://github.com/ShirkNeko/susfs4ksu/tree/{self.config.kernel_branch}/kernel_patches/KernelSU\n"
+                f"https://gitlab.com/simonpunk/susfs4ksu/-/tree/{self.config.kernel_branch}/kernel_patches/KernelSU\n"
                 f"This is a hard stop - continuing without this patch produces "
                 f"a kernel where CONFIG_KSU_SUSFS is never actually defined, "
                 f"so SUSFS silently compiles out entirely despite the main "

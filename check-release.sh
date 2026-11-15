@@ -57,7 +57,7 @@ set -uo pipefail
 BRANCH="gki-android13-5.15"
 
 SUKI_URL="https://github.com/SukiSU-Ultra/SukiSU-Ultra.git"
-SUSFS_URL="https://github.com/ShirkNeko/susfs4ksu.git"
+SUSFS_URL="https://gitlab.com/simonpunk/susfs4ksu.git"
 AWG_URL="https://github.com/amnezia-vpn/amneziawg-linux-kernel-module.git"
 CACHE="${GKI_CHECK_CACHE:-$HOME/.cache/gki-check}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -143,8 +143,16 @@ SUSFS="$CACHE/susfs4ksu"
 sync_repo() {   # $1=url $2=dir $3=label
     if [ -d "$2/.git" ] || [ -f "$2/HEAD" ]; then
         echo "Updating $3..."
-        git -C "$2" fetch -q --tags --prune origin || {
-            echo "  fetch failed - using cached copy" >&2; return 0; }
+        # Re-point a cached clone whose remote moved (ShirkNeko's susfs4ksu
+        # mirror was removed 2026-11-15; GitLab is used now).
+        [ "$(git -C "$2" remote get-url origin 2>/dev/null)" = "$1" ] || {
+            echo "  remote moved -> $1"
+            git -C "$2" remote set-url origin "$1"; }
+        # --force: upstream moves tags sometimes (SukiSU-Nova re-tagged v3.0.0
+        # on 2026-11-16); without it git refuses the whole fetch with
+        # "would clobber existing tag" and the cached copy goes stale.
+        git -C "$2" fetch -q --tags --prune --force origin || {
+            echo "  fetch failed - using cached copy (see the git error above)" >&2; return 0; }
     else
         echo "Cloning $3..."
         git clone -q --filter=blob:none --no-checkout "$1" "$2" || return 1
@@ -329,7 +337,9 @@ if [ -n "$KSU_FORCE" ]; then
 fi
 BUILDING="building main"
 [ -n "$KSU_FORCE" ] && BUILDING="building ${CAND_SHA:0:8} (--ksu)"
-NEWEST_TAG="$(git -C "$SUKI" tag --sort=-creatordate | head -n1)"
+# Version tags only (v1.2.3, v4.3.0-r2): SukiSU-Nova also keeps a moving
+# "manager-ci" tag on main HEAD, which is not a release.
+NEWEST_TAG="$(git -C "$SUKI" tag --list 'v[0-9]*' --sort=-creatordate | head -n1)"
 if [ -n "$NEWEST_TAG" ]; then
     TAG_SHA="$(sha_of "$SUKI" "$NEWEST_TAG")"
     if [ "$TAG_SHA" = "$MAIN_SHA" ]; then

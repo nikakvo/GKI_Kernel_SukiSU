@@ -31,7 +31,7 @@ Download the latest build from **[Releases](https://github.com/nikakvo/GKI_Kerne
 | Feature | What it gives you |
 |---------|-------------------|
 | **[SukiSU-Ultra](https://github.com/SukiSU-Ultra/SukiSU-Ultra)** | Kernel-level root (built in, not LKM), with module preinit support |
-| **[SUSFS v2.3.0](https://github.com/ShirkNeko/susfs4ksu)** | Kernel-side root hiding (paths, mounts, uname/cmdline spoofing). Needs the [userspace module](#susfs-userspace) |
+| **[SUSFS v2.3.0](https://gitlab.com/simonpunk/susfs4ksu)** | Kernel-side root hiding (paths, mounts, uname/cmdline spoofing). Needs the [userspace module](#susfs-userspace) |
 | **KPM** | Load KernelPatch modules at runtime |
 | **BBR v3** | Newer TCP congestion control (falls back to BBR v1 if the patch doesn't fit) |
 | **BIC, Westwood+, H-TCP** | Extra congestion control algorithms to switch to at runtime |
@@ -213,7 +213,7 @@ Kernel versions and Google tags come from `.github/workflows/config/matrix.json`
 
 - **[ShirkNeko/GKI_KernelSU_SUSFS](https://github.com/ShirkNeko/GKI_KernelSU_SUSFS)** - the build system this started as a fork of.
 - **[SukiSU-Ultra](https://github.com/SukiSU-Ultra/SukiSU-Ultra)** and **[SukiSU_patch](https://github.com/SukiSU-Ultra/SukiSU_patch)** - root implementation, KPM and extra patches (ZRAM, hooks).
-- **[susfs4ksu](https://gitlab.com/simonpunk/susfs4ksu)** (via [ShirkNeko/susfs4ksu](https://github.com/ShirkNeko/susfs4ksu)) - SUSFS.
+- **[susfs4ksu](https://gitlab.com/simonpunk/susfs4ksu)** - SUSFS.
 - **[WildKernels/kernel_patches](https://github.com/WildKernels/kernel_patches)** - BBRv3 backport.
 - **[amnezia-vpn/amneziawg-linux-kernel-module](https://github.com/amnezia-vpn/amneziawg-linux-kernel-module)** - AmneziaWG.
 - **[ravindu644/Droidspaces-OSS](https://github.com/ravindu644/Droidspaces-OSS)** - Droidspaces app and kABI-safe patches.

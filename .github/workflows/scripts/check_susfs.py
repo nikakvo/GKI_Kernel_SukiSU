@@ -55,7 +55,7 @@ import sys
 import tempfile
 from pathlib import Path
 
-SUSFS_REPO_URL = "https://github.com/ShirkNeko/susfs4ksu.git"
+SUSFS_REPO_URL = "https://gitlab.com/simonpunk/susfs4ksu.git"
 
 
 def default_pins() -> str:

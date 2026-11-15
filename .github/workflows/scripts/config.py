@@ -18,7 +18,7 @@ def get_susfs_version() -> str:
 
     for branch in branches:
         try:
-            url = f"https://raw.githubusercontent.com/ShirkNeko/susfs4ksu/{branch}/kernel_patches/include/linux/susfs.h"
+            url = f"https://gitlab.com/simonpunk/susfs4ksu/-/raw/{branch}/kernel_patches/include/linux/susfs.h"
             req = urllib.request.Request(url, headers={'User-Agent': 'Python'})
             with urllib.request.urlopen(req, context=ssl_ctx, timeout=10) as response:
                 content = response.read().decode('utf-8')
@@ -137,7 +137,13 @@ KSU_REPO_CONFIG = {"repo_url": "https://github.com/SukiSU-Ultra/SukiSU-Ultra.git
 
 # SUSFS repository configuration
 #
-# ShirkNeko's GitHub fork only carries branches up to gki-android15-6.6 -
+# 2026-11-15: ShirkNeko's GitHub mirror (github.com/ShirkNeko/susfs4ksu) was
+# removed ("Repository not found"). Upstream simonpunk on GitLab carries the
+# same commits with the same hashes (c1d1da4 checked), so it is now the
+# primary remote; existing workspace / check-release clones are re-pointed
+# to it automatically.
+#
+# History: ShirkNeko's GitHub fork only carried branches up to gki-android15-6.6 -
 # there is no gki-android16-6.12 and no 6.18/android17 branch on it at all.
 # Upstream (simonpunk on GitLab) does have gki-android16-6.12 (+ -dev), and
 # is what WildKernels tracks. Commit hashes are shared between the two for
@@ -148,7 +154,7 @@ KSU_REPO_CONFIG = {"repo_url": "https://github.com/SukiSU-Ultra/SukiSU-Ultra.git
 # SUSFS_BRANCH_REPOS maps a kernel branch to the remote that actually has
 # it. Anything not listed falls back to SUSFS_REPO_CONFIG["repo_url"], and
 # the builder retries against SUSFS_UPSTREAM_URL if the primary clone fails.
-SUSFS_REPO_CONFIG = {"repo_url": "https://github.com/ShirkNeko/susfs4ksu.git"}
+SUSFS_REPO_CONFIG = {"repo_url": "https://gitlab.com/simonpunk/susfs4ksu.git"}
 SUSFS_UPSTREAM_URL = "https://gitlab.com/simonpunk/susfs4ksu.git"
 # Keys are BuildConfig.kernel_branch values, i.e. "gki-<android>-<kver>".
 SUSFS_BRANCH_REPOS = {
