@@ -1450,6 +1450,13 @@ CONFIG_CIFS_XATTR=y
     # released from v4.2.0. Pinning the source was not enough; the number
     # has to be pinned too, or the build is not reproducible in the only
     # sense that matters to the device.
+    #
+    # The base and offset are read from the pinned Kbuild itself (same as
+    # check-release.sh does): SukiSU-Ultra used 40000 / 2815, and the
+    # SukiSU-Nova rename (ee5727e5, v3.0.0, 2026-11-16) reset them to
+    # 30000 / 4001 - with the old hard-coded values every Nova build failed
+    # with "below SukiSU's VERSION_BASE". The constants below are only the
+    # fallback for an old Kbuild without VERSION_BASE / VERSION_OFFSET lines.
     VERSION_BASE = 40000
     VERSION_OFFSET = 2815
 
@@ -1459,13 +1466,6 @@ CONFIG_CIFS_XATTR=y
         if not wanted:
             self._mark("ksu_version_code", "skipped", "not requested (live GitHub count)")
             return
-
-        local_count = wanted - self.VERSION_BASE + self.VERSION_OFFSET
-        if local_count <= 0:
-            raise RuntimeError(
-                f"--ksu-version-code {wanted} is below SukiSU's VERSION_BASE "
-                f"({self.VERSION_BASE}); that cannot correspond to any commit count."
-            )
 
         candidates = [
             self.work_dir / "KernelSU/kernel/Kbuild",
@@ -1479,6 +1479,28 @@ CONFIG_CIFS_XATTR=y
             )
 
         text = target.read_text()
+
+        def kbuild_int(name: str, fallback: int) -> int:
+            found = re.findall(rf"^{name}\s*:=\s*(\d+)\s*$", text, re.MULTILINE)
+            if len(found) > 1:
+                raise RuntimeError(
+                    f"{target} assigns {name} {len(found)} times - SukiSU's "
+                    f"version machinery has changed shape, refusing to guess."
+                )
+            return int(found[0]) if found else fallback
+
+        base = kbuild_int("VERSION_BASE", self.VERSION_BASE)
+        offset = kbuild_int("VERSION_OFFSET", self.VERSION_OFFSET)
+        logger.info(f"SukiSU version formula from {target.name}: "
+                    f"{base} + LOCAL_COUNT - {offset}")
+
+        local_count = wanted - base + offset
+        if local_count <= 0:
+            raise RuntimeError(
+                f"--ksu-version-code {wanted} does not fit SukiSU's formula "
+                f"{base} + LOCAL_COUNT - {offset} ({target.name}): it would need "
+                f"LOCAL_COUNT={local_count}, which cannot be a commit count."
+            )
         pattern = re.compile(
             r"^(LOCAL_COUNT\s*:=).*$", re.MULTILINE)
         if not pattern.search(text):

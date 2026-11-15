@@ -1213,9 +1213,9 @@ if [ "$KSU_NEW" = 1 ] || [ "$SUSFS_NEW" = 1 ] || [ "$AWG_NEW" = 1 ]; then
     echo "  Before flashing:"
     echo "   1. Manager: install the SukiSU CI build for commit ${CAND_SHA:0:8} and"
     echo "      check it says ${B}$CAND_CODE${N} - kernel and manager must match."
-    echo "      https://github.com/SukiSU-Ultra/SukiSU-Ultra/actions/workflows/build-manager.yml"
+    echo "      https://github.com/SukiSU-Nova/SukiSU-Nova/actions/workflows/build-manager.yml"
     echo "   2. In the build log / PATCH_STATUS.json:"
-    echo "        SukiSU-Ultra version: $CAND_CODE [...-${CAND_SHA:0:8}@HEAD]"
+    echo "        SukiSU-Nova version: $CAND_CODE [...-${CAND_SHA:0:8}@HEAD]"
     echo "        susfs_kernelsu_integration -> applied"
     echo "        image_ikconfig             -> all expected present"
     if [ "$BRANCH" = "gki-android13-5.15" ] && [ -n "$AWG_USE" ]; then
