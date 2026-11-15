@@ -33,6 +33,10 @@
 #      HEAD (e.g. an older one that made a good kernel) and prints the
 #      commands for it. No fallbacks then. The list of newer commits it leaves
 #      out is printed, so you can step through them one by one.
+#   5c. --ksu <commit> tests that one SukiSU-Ultra commit instead of main
+#      HEAD (e.g. the last commit before one susfs has not synced with yet).
+#      Its own manager CI build must exist - kernel and manager version
+#      codes must match.
 #   6. (android13-5.15) takes amneziawg-linux-kernel-module master HEAD and
 #      runs the build's own prepare_amneziawg_src() on it. If it fits, the
 #      commands get --amneziawg-commit <HEAD> and answer 1 saves it too; if
@@ -61,6 +65,7 @@ BUILDER_DIR="$SCRIPT_DIR/.github/workflows/scripts"
 CONFIG_PY="$BUILDER_DIR/config.py"
 ASK=1
 SUSFS_FORCE=""
+KSU_FORCE=""
 
 while [ $# -gt 0 ]; do
     case "$1" in
@@ -69,9 +74,12 @@ while [ $# -gt 0 ]; do
         --no-ask) ASK=0; shift ;;
         --susfs)  [ $# -ge 2 ] || { echo "--susfs needs a susfs commit" >&2; exit 1; }
                   SUSFS_FORCE="$2"; shift 2 ;;
+        --ksu)    [ $# -ge 2 ] || { echo "--ksu needs a SukiSU-Ultra commit" >&2; exit 1; }
+                  KSU_FORCE="$2"; shift 2 ;;
         -h|--help)
             echo "Usage: $0 [--branch gki-android13-5.15|gki-android14-6.1|gki-android15-6.6] [--cache DIR] [--no-ask]"
             echo "          [--susfs <commit>]   test this susfs commit instead of the branch HEAD"
+            echo "          [--ksu <commit>]     test this SukiSU-Ultra commit instead of main HEAD"
             exit 0 ;;
         *) echo "Unknown argument: $1" >&2; exit 1 ;;
     esac
@@ -307,6 +315,20 @@ MAIN_UAPI="$(uapi_of origin/main)"; : "${MAIN_UAPI:=?}"
 # tag itself is one version code behind the manager people install. The newest
 # tag is only shown for reference (handy for the release notes).
 CAND_SHA="$MAIN_SHA"; CAND_LABEL="main"
+# --ksu <commit>: this SukiSU commit instead of main HEAD (must be on main).
+if [ -n "$KSU_FORCE" ]; then
+    CAND_SHA="$(sha_of "$SUKI" "$KSU_FORCE")"
+    if [ -z "$CAND_SHA" ]; then
+        bad "--ksu $KSU_FORCE: no such commit in SukiSU-Ultra"; exit 1
+    fi
+    if ! git -C "$SUKI" merge-base --is-ancestor "$CAND_SHA" "$MAIN_SHA" 2>/dev/null; then
+        bad "--ksu ${CAND_SHA:0:8} is not on main"; exit 1
+    fi
+    CAND_LABEL="SukiSU"
+    MAIN_UAPI="$(uapi_of "$CAND_SHA")"; : "${MAIN_UAPI:=?}"   # UAPI of the chosen commit
+fi
+BUILDING="building main"
+[ -n "$KSU_FORCE" ] && BUILDING="building ${CAND_SHA:0:8} (--ksu)"
 NEWEST_TAG="$(git -C "$SUKI" tag --sort=-creatordate | head -n1)"
 if [ -n "$NEWEST_TAG" ]; then
     TAG_SHA="$(sha_of "$SUKI" "$NEWEST_TAG")"
@@ -314,9 +336,9 @@ if [ -n "$NEWEST_TAG" ]; then
         echo "  Newest tag: ${B}$NEWEST_TAG${N} - main HEAD is the tag itself (UAPI $MAIN_UAPI)."
     elif git -C "$SUKI" merge-base --is-ancestor "$TAG_SHA" "$MAIN_SHA" 2>/dev/null; then
         echo "  Newest tag: ${B}$NEWEST_TAG${N} ($(version_code_of "$TAG_SHA" || echo '?')) - main is" \
-             "$(git -C "$SUKI" rev-list --count "$TAG_SHA..$MAIN_SHA") commit(s) ahead, building main (UAPI $MAIN_UAPI)."
+             "$(git -C "$SUKI" rev-list --count "$TAG_SHA..$MAIN_SHA") commit(s) ahead, $BUILDING (UAPI $MAIN_UAPI)."
     else
-        echo "  Newest tag: $NEWEST_TAG (not on main) - building main (UAPI $MAIN_UAPI)."
+        echo "  Newest tag: $NEWEST_TAG (not on main) - $BUILDING (UAPI $MAIN_UAPI)."
     fi
 fi
 CAND_CODE="$(version_code_of "$CAND_SHA")" || CAND_CODE="?"
@@ -324,8 +346,20 @@ CAND_CODE="$(version_code_of "$CAND_SHA")" || CAND_CODE="?"
 printf "  %-10s %-10s %-12s %s\n" "" "SHA" "DATE" "VERSION"
 printf "  %-10s %-10s %-12s %s\n" "built" "${PIN_SHA:0:8}" \
     "$(git -C "$SUKI" log -1 --format=%cs "$PIN_SHA" 2>/dev/null)" "$PINNED_KSU_VERSION_CODE"
-printf "  %-10s %-10s %-12s %s\n" "newest" "${CAND_SHA:0:8}" \
-    "$(git -C "$SUKI" log -1 --format=%cs "$CAND_SHA")" "$CAND_CODE"
+if [ -n "$KSU_FORCE" ]; then
+    printf "  %-10s %-10s %-12s %s\n" "chosen" "${CAND_SHA:0:8}" \
+        "$(git -C "$SUKI" log -1 --format=%cs "$CAND_SHA")" "$CAND_CODE  (--ksu)"
+    if [ "$CAND_SHA" != "$MAIN_SHA" ]; then
+        printf "  %-10s %-10s %-12s %s\n" "main" "${MAIN_SHA:0:8}" \
+            "$(git -C "$SUKI" log -1 --format=%cs "$MAIN_SHA")" "$(version_code_of "$MAIN_SHA" || echo '?')  (left out)"
+        echo "  Newer kernel commits left out:"
+        git -C "$SUKI" log --oneline --no-decorate "$CAND_SHA..$MAIN_SHA" -- kernel uapi 2>/dev/null \
+            | sed 's/^/      /' | grep . || echo "      (none - only manager/CI commits)"
+    fi
+else
+    printf "  %-10s %-10s %-12s %s\n" "newest" "${CAND_SHA:0:8}" \
+        "$(git -C "$SUKI" log -1 --format=%cs "$CAND_SHA")" "$CAND_CODE"
+fi
 
 KSU_NEW=0
 if [ "$CAND_SHA" != "$PIN_SHA" ]; then
@@ -601,7 +635,7 @@ trap cleanup EXIT
 
 # patch_test <susfs ref to take the KernelSU patch from>  -> sets VERDICT, DETAIL
 patch_test() {
-    local ref="$1" out rc failed_files n_failed rec left rej
+    local ref="$1" out rc failed_files n_failed reversed_files rec left rej
     VERDICT="STOP"; DETAIL=""; LAST_FAILED=""
     drop_worktree
     if ! git -C "$SUSFS" show "$ref:$KSU_PATCH_REL" > "$PATCHFILE" 2>/dev/null; then
@@ -613,10 +647,19 @@ patch_test() {
     fi
     out="$(cd "$WORKTREE" && patch -p1 --fuzz=3 < "$PATCHFILE" 2>&1)"; rc=$?
     printf '%s\n' "$out" > "$PATCHOUT"
+    # "N out of N hunks ignored" = patch thought the whole file was already
+    # patched ("Reversed (or previously applied) patch detected") and skipped
+    # it - every hunk of that file is in the .rej, so count it as failed too.
     failed_files="$(printf '%s\n' "$out" \
-        | awk '/^patching file /{f=$3} /FAILED/{if(f!=""){print f; f=""}}' \
+        | awk '/^patching file /{f=$3} /FAILED|hunks? ignored/{if(f!=""){print f; f=""}}' \
         | sort -u | tr '\n' ' ')"
-    n_failed="$(printf '%s\n' "$out" | grep -cE '^Hunk.*FAILED' || true)"
+    n_failed="$(printf '%s\n' "$out" | awk '
+        /^Hunk.*FAILED/ {n++}
+        /^[0-9]+ out of [0-9]+ hunks? ignored/ {n += $1}
+        END {print n+0}')"
+    reversed_files="$(printf '%s\n' "$out" \
+        | awk '/^patching file /{f=$3} /^Reversed \(or previously applied\) patch detected/{if(f!=""){print f; f=""}}' \
+        | sort -u | tr '\n' ' ')"
     LAST_FAILED="$failed_files"
     # Exit 2 = patch gave up (malformed patch file, ...): the files after that
     # point were never patched, so no recovery can make this a real fit.
@@ -626,6 +669,10 @@ patch_test() {
     fi
     if [ "$rc" -ne 0 ]; then
         echo "  $n_failed hunk(s) failed in: ${failed_files:-?}"
+    fi
+    if [ -n "$reversed_files" ]; then
+        echo "  patch skipped (\"Reversed (or previously applied) patch detected\"): $reversed_files"
+        echo "    = SukiSU now has lines the susfs patch also adds or changes there."
     fi
     # Same code the build runs: the drift recovery (only when hunks failed),
     # then _disable_susfs_preinit() + _fixup_susfs_sucompat_util_h() +
@@ -1102,6 +1149,21 @@ fi
 
 if [ "$VERDICT" = "STOP" ]; then
     bad "Do not build this combination. Send the output above for a look."
+    # A SukiSU commit since the last good build changed a file with rejected
+    # hunks: point at the commit right before the oldest such commit, so the
+    # newest susfs can still be tried there until susfs syncs.
+    if [ -z "$KSU_FORCE" ] && [ -n "$PIN_SHA" ] && [ -n "${LAST_FAILED// /}" ]; then
+        # shellcheck disable=SC2086
+        culprit="$(git -C "$SUKI" log --format=%H --reverse "$PIN_SHA..$CAND_SHA" -- $LAST_FAILED 2>/dev/null | head -n1)"
+        if [ -n "$culprit" ]; then
+            before="$(git -C "$SUKI" rev-parse "$culprit^" 2>/dev/null)"
+            echo
+            echo "  SukiSU $(git -C "$SUKI" log -1 --format='%h "%s"' "$culprit")"
+            echo "  changed a file the susfs patch needs. Until susfs syncs with it, try the"
+            echo "  commit right before it ($(version_code_of "$before" || echo '?')):"
+            echo "    ./check-release.sh --ksu $before"
+        fi
+    fi
     echo
     echo "  The last working build is still:"
     echo "    ./build-kernel.sh ${EXTRA}--ksu-commit $PINNED_KSU_REF \\"

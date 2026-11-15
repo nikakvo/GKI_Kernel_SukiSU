@@ -119,17 +119,17 @@ ANDROID_KERNEL_MAP = {
 # a hash is valid on exactly one). Branches not listed build from HEAD.
 # android13-5.15 is built, flashed and daily-driven; 6.1 / 6.6 are
 # verified to patch (incl. _recover_susfs_init_c) but not device-tested.
-DEFAULT_KSU_REF = "3af6085d0d26e73ffd1a3e7b34362435dcfb5a03"
-DEFAULT_KSU_VERSION_CODE = 41176
+DEFAULT_KSU_REF = "d84d9e655ea655e871dcac721c0aed551f1c2582"
+DEFAULT_KSU_VERSION_CODE = 41181
 DEFAULT_SUSFS_PINS = {
-    "gki-android13-5.15": "fe943d15ec6a1891f7a360bf210589bdffe4e318",
+    "gki-android13-5.15": "9da0b0ede6e5d6fde1d0dc7ac001338cb5f9ff72",
     "gki-android14-6.1": "273ae364c5b7c92ceb15634c9f075b6fc0501048",
     "gki-android15-6.6": "9d9464f191b2d846590ac4d1b52e123df135c401",
 }
 # AmneziaWG kernel module (github.com/amnezia-vpn/amneziawg-linux-kernel-module),
 # built in next to WireGuard. Always a full commit SHA, never a branch.
 # check-release.sh probes upstream master and rewrites this line too.
-DEFAULT_AMNEZIAWG_REF = "4569c4c67f3a57414969260cafbbd04694fbaae0"
+DEFAULT_AMNEZIAWG_REF = "63ed35de3d3f135b17e8eae0b84949e7700303be"
 
 KSU_REPO_CONFIG = {"repo_url": "https://github.com/SukiSU-Ultra/SukiSU-Ultra.git",
                     "branch": "main",

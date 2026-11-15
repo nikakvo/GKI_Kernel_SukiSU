@@ -199,6 +199,8 @@ SukiSU-Ultra and SUSFS move fast, and the newest commits don't always fit togeth
 
 After you build, flash and test, run it again and answer `1` to save the new pins in `config.py` (or `3` to blacklist a broken combination).
 
+`--susfs <commit>` tests one susfs commit instead of the branch HEAD, and `--ksu <commit>` one SukiSU-Ultra commit instead of main HEAD (for example the commit right before one susfs has not synced with yet - a STOP prints that command). The manager must be the build of that same commit.
+
 ### GitHub Actions
 
 The **Kernel Build** (one version) and **Build Kernels** (whole matrix) workflows use the same pins when their inputs are left empty. With all its fields left as they are, **Kernel Build** builds the same kernel as `./build-kernel.sh` with no flags (android13-5.15.223, AmneziaWG, ath9k_htc modules included). CI builds **Thin LTO** (Full LTO needs ~27 GB RAM), so they are not the tested release binaries. The **Check Release** workflow runs `check-release.sh` and writes on its Summary page what to put into Kernel Build for the newest commits that fit.

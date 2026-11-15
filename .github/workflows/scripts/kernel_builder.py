@@ -2873,6 +2873,12 @@ CONFIG_CIFS_XATTR=y
         sel_rej = ksu_dir / "kernel/feature/selinux_hide.c.rej"
         if sel_rej.exists():
             if not self._recover_susfs_selinux_hide_c(ksu_dir):
+                logger.error(
+                    "kernel/feature/selinux_hide.c: SukiSU-Ultra changed code the SUSFS "
+                    "patch rewrites (more than the function bodies it deletes) - needs a "
+                    "susfs \"Sync with upstream\" for that SukiSU commit "
+                    "(_recover_susfs_selinux_hide_c)"
+                )
                 return False
         # kernel/runtime/ksud_integration.c likewise (SukiSU's
         # second-stage module_blacklist call) - see
@@ -3777,14 +3783,31 @@ CONFIG_CIFS_XATTR=y
         '#ifdef CONFIG_KSU_SUSFS_PRIORITY_UID_FILTER\n',
         '#endif // #ifdef CONFIG_KSU_SUSFS_PRIORITY_UID_FILTER\n',
     )
+    # susfs 95cfbcb (2026-11-15, sus_path_uid_filter) adds a second renew
+    # call right after the guarded priority block, in its own
+    # CONFIG_KSU_SUSFS_SUS_PATH guard, followed by an empty line before the
+    # closing brace. Only accepted together with the guarded priority block.
+    _PKG_OBS_TW_SUS_PATH_CALL = 'susfs_parse_sus_path_app_strings();'
+    _PKG_OBS_TW_SUS_PATH_BLOCK = (
+        '#ifdef CONFIG_KSU_SUSFS_SUS_PATH\n'
+        '    // Renew the sus path uid bitmap filter\n'
+        '    susfs_parse_sus_path_app_strings();\n'
+        '#endif // #ifdef CONFIG_KSU_SUSFS_SUS_PATH\n'
+        '\n'
+    )
     _PKG_OBS_TW_PRIORITY = tuple(
         '    track_throne(false);\n'
         + (guard[0] if guard else '')
         + f'    // Renew the {word} uid bitmap filter\n'
         '    susfs_parse_priority_app_strings();\n'
         + (guard[1] if guard else '')
+        + extra
         + '}\n'
-        for guard in ((), _PKG_OBS_TW_PRIORITY_GUARD)
+        for guard, extra in (
+            ((), ''),
+            (_PKG_OBS_TW_PRIORITY_GUARD, ''),
+            (_PKG_OBS_TW_PRIORITY_GUARD, _PKG_OBS_TW_SUS_PATH_BLOCK),
+        )
         for word in ('getpriority', 'priority')
     )
 
@@ -3808,10 +3831,15 @@ CONFIG_CIFS_XATTR=y
             return True
         text = target.read_text()
         call = 'susfs_parse_priority_app_strings();'
+        sus_path_call = self._PKG_OBS_TW_SUS_PATH_CALL
+        n_sus_path = text.count(sus_path_call)
         if call not in text:
-            return True
+            # The sus path renew is only known next to the priority one.
+            return n_sus_path == 0
         top, block = self._PKG_OBS_FUNC_TOP, self._PKG_OBS_PRIORITY_BLOCK
         if text.count(call) != 1 or '#include <linux/susfs.h>' not in text:
+            return False
+        if n_sus_path > 1:
             return False
         # susfs f3ceb5d+: the call ends ksu_track_throne_tw_func(). Accept it
         # only there (first closing brace after the function head).
@@ -3823,6 +3851,9 @@ CONFIG_CIFS_XATTR=y
             tw_tail = tw_tails[0]
             if text.count(tw_tail) != 1:
                 return False
+            # susfs 95cfbcb+: the sus path renew must be part of this tail.
+            if n_sus_path and sus_path_call not in tw_tail:
+                return False
             if text.count(tw_head) != 1:
                 return False
             start = text.index(tw_head)
@@ -3831,6 +3862,8 @@ CONFIG_CIFS_XATTR=y
                 return False
             return True  # applied in the right place (newer susfs layout)
         # susfs 0b5f967: the call opens ksu_defer_track_throne().
+        if n_sus_path:
+            return False  # never seen together with the old layout
         if text.count(block) != 1 or text.count(top) != 1:
             return False
         if top + block in text:
