@@ -400,7 +400,7 @@ def main() -> int:
     parser.add_argument("--since-days", type=int, default=14,
                         help="Lookback window for branches with no pin (default: 14)")
     parser.add_argument("--workspace", default=os.environ.get(
-        "GKI_WORKSPACE", str(Path.home() / "gki-workspace")),
+        "GKI_WORKSPACE", str(Path.home() / "gki-workspace-nova")),
         help="Build workspace - an existing susfs4ksu clone there is reused")
     parser.add_argument("--repo", default=None,
                         help="Path to a susfs4ksu checkout to use directly")

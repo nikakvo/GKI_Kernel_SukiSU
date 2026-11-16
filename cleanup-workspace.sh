@@ -4,7 +4,7 @@
 # keeps the shared repos/toolchain for faster future builds.
 
 set -e
-WORKSPACE="$HOME/gki-workspace"
+WORKSPACE="$HOME/gki-workspace-nova"   # NOVA / Forgejo copy
 
 echo "=== Before cleanup ==="
 du -sh "$WORKSPACE"/* 2>/dev/null

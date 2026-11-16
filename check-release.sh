@@ -51,15 +51,22 @@
 # Actions workflows), so saving here also moves the defaults for forks/CI.
 #
 # Read-only for the build workspace. Clones into a cache dir.
+#
+# NOVA / FORGEJO COPY (~/sukisu-nova, branch forgejo): SukiSU, SukiSU_Patch
+# and KernelPatch come from ShirkNeko's Forgejo server (SukiSU-Nova left
+# GitHub on 2026-11-16); SUSFS stays on GitLab. Its own cache
+# (~/.cache/gki-check-nova) and build workspace (~/gki-workspace-nova) keep
+# it apart from the main copy in ~/GKI_KernelSU_SUSFS-main.
 
 set -uo pipefail
 
 BRANCH="gki-android13-5.15"
 
-SUKI_URL="https://github.com/SukiSU-Ultra/SukiSU-Ultra.git"
+FORGEJO="https://git.zako.shirkneko.top:20004/shirkneko"
+SUKI_URL="$FORGEJO/SukiSU.git"
 SUSFS_URL="https://gitlab.com/simonpunk/susfs4ksu.git"
 AWG_URL="https://github.com/amnezia-vpn/amneziawg-linux-kernel-module.git"
-CACHE="${GKI_CHECK_CACHE:-$HOME/.cache/gki-check}"
+CACHE="${GKI_CHECK_CACHE:-$HOME/.cache/gki-check-nova}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 BUILDER_DIR="$SCRIPT_DIR/.github/workflows/scripts"
 CONFIG_PY="$BUILDER_DIR/config.py"
@@ -161,7 +168,7 @@ sync_repo() {   # $1=url $2=dir $3=label
 sync_repo "$SUKI_URL"  "$SUKI"  "SukiSU-Ultra" || exit 1
 sync_repo "$SUSFS_URL" "$SUSFS" "susfs4ksu"    || exit 1
 # KPM image patcher (informational only, never stops the run)
-SKPATCH_URL="https://github.com/ShirkNeko/SukiSU_patch.git"
+SKPATCH_URL="$FORGEJO/SukiSU_Patch.git"
 SKPATCH="$CACHE/SukiSU_patch"
 sync_repo "$SKPATCH_URL" "$SKPATCH" "SukiSU_patch (KPM patcher)" || SKPATCH=""
 # AmneziaWG (never stops the run: on any trouble the known-good pin is used)
@@ -302,17 +309,31 @@ uapi_of() {     # $1=ref -> number or nothing
         | grep -m1 -oE "KERNEL_SU_UAPI_VERSION = [0-9]+" | grep -oE "[0-9]+$"
 }
 version_code_of() {   # $1=sha -> same formula as kernel/Kbuild and the manager
-    local kb base off count
+    # Up to 30000 Kbuild subtracts the offset, since the Forgejo move
+    # (b938c53c, 35000) it adds it - the sign is read from the KSU_VERSION
+    # line of that commit's own Kbuild, same as kernel_builder.py does.
+    local kb base off count sign
     kb="$(git -C "$SUKI" show "$1:kernel/Kbuild" 2>/dev/null)"
     base="$(printf '%s\n' "$kb" | grep -m1 -E '^VERSION_BASE[[:space:]]*:=' | grep -oE '[0-9]+$')"
     off="$(printf '%s\n'  "$kb" | grep -m1 -E '^VERSION_OFFSET[[:space:]]*:=' | grep -oE '[0-9]+$')"
+    sign="$(printf '%s\n' "$kb" | grep -E '^KSU_VERSION[[:space:]]*:=' \
+        | sed -n 's/.*\$(VERSION_BASE)[[:space:]]*+[[:space:]]*\$(LOCAL_COUNT)[[:space:]]*\([+-]\)[[:space:]]*\$(VERSION_OFFSET).*/\1/p')"
     count="$(git -C "$SUKI" rev-list --count "$1" 2>/dev/null)"
     [ -n "$base" ] && [ -n "$off" ] && [ -n "$count" ] || return 1
-    echo $(( base + count - off ))
+    [ "$(printf '%s\n' "$sign" | grep -c .)" = 1 ] || return 1
+    if [ "$sign" = "+" ]; then
+        echo $(( base + count + off ))
+    else
+        echo $(( base + count - off ))
+    fi
+}
+repo_name_of() {   # $1=sha -> REPO_NAME from that commit's Kbuild (log line "<name> version:")
+    git -C "$SUKI" show "$1:kernel/Kbuild" 2>/dev/null \
+        | sed -n 's/^REPO_NAME[[:space:]]*:=[[:space:]]*\([^[:space:]]*\).*/\1/p' | head -n1
 }
 
 # ---- 1. which SukiSU to build ------------------------------------------------
-hdr "SukiSU-Ultra"
+hdr "SukiSU (Forgejo)"
 
 PIN_SHA="$(sha_of "$SUKI" "$PINNED_KSU_REF")"
 MAIN_SHA="$(sha_of "$SUKI" origin/main)"
@@ -539,7 +560,7 @@ kpm_patcher_report() {
         warn "A KPM patcher newer than the KPM pin was published."
         echo "        Send this output for a look - it needs a test build and"
         echo "        'fastboot boot boot.img' before it can replace the pin."
-        echo "        https://github.com/ShirkNeko/SukiSU_patch/commits/main/kpm"
+        echo "        $FORGEJO/SukiSU_Patch/commits/branch/main/kpm"
     else
         ok "Nothing newer than the KPM pin ${next:0:7}."
     fi
@@ -1221,11 +1242,11 @@ if [ "$KSU_NEW" = 1 ] || [ "$SUSFS_NEW" = 1 ] || [ "$AWG_NEW" = 1 ]; then
         echo "$CAND_SHA $SUSFS_USE $CAND_CODE $(date +%F) $AWG_USE" > "$PENDING"
     echo
     echo "  Before flashing:"
-    echo "   1. Manager: install the SukiSU CI build for commit ${CAND_SHA:0:8} and"
+    echo "   1. Manager: install the SukiSU Manager for commit ${CAND_SHA:0:8} and"
     echo "      check it says ${B}$CAND_CODE${N} - kernel and manager must match."
-    echo "      https://github.com/SukiSU-Nova/SukiSU-Nova/actions/workflows/build-manager.yml"
+    echo "      $FORGEJO/SukiSU/releases  (or its Actions page for a CI build)"
     echo "   2. In the build log / PATCH_STATUS.json:"
-    echo "        SukiSU-Nova version: $CAND_CODE [...-${CAND_SHA:0:8}@HEAD]"
+    echo "        $(repo_name_of "$CAND_SHA" || true) version: $CAND_CODE [...-${CAND_SHA:0:8}@...]"
     echo "        susfs_kernelsu_integration -> applied"
     echo "        image_ikconfig             -> all expected present"
     if [ "$BRANCH" = "gki-android13-5.15" ] && [ -n "$AWG_USE" ]; then

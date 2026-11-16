@@ -10,6 +10,7 @@ from typing import Optional, Callable
 from dataclasses import dataclass, field
 
 from config import (BuildConfig, KSU_REPO_CONFIG, SUSFS_REPO_CONFIG, SUKISU_PATCH_REPO_CONFIG,
+                   SUKISU_FORGEJO, forgejo_raw_url,
                    DEFAULT_KSU_REF, SUSFS_UPSTREAM_URL, SUSFS_BRANCH_REPOS,
                    ANYKERNEL_CONFIG, KERNEL_PATCHES_CONFIG, BBG_CONFIG, TOOLCHAIN_CONFIG,
                    LEGACY_FIXES, OP8E_PATCH_URL)
@@ -24,7 +25,7 @@ from config import (BuildConfig, KSU_REPO_CONFIG, SUSFS_REPO_CONFIG, SUKISU_PATC
 # then build and boot-test before releasing.
 KPM_PATCH_REF = "547ae94bcaec53d030398f857950c64662043a5d"
 KPM_PATCH_SHA256 = "1bd00563e9d8fbbd11a16c0c1c59c5add406e6c5c92557def50f93d6f0aebe2d"
-KPM_PATCH_URL = f"https://raw.githubusercontent.com/ShirkNeko/SukiSU_patch/{KPM_PATCH_REF}/kpm/patch_linux"
+KPM_PATCH_URL = forgejo_raw_url("SukiSU_Patch", KPM_PATCH_REF, "kpm/patch_linux")
 
 # DEFAULT KernelPatch since 2026-10-26 (was opt-in --kpm-next): 0.13.9 until
 # 2026-10-27, 0.14.0 since 2026-10-28 (see below).
@@ -65,8 +66,8 @@ KPM_PATCH_URL = f"https://raw.githubusercontent.com/ShirkNeko/SukiSU_patch/{KPM_
 # (sha256 67c6dd46...), kptools 40ce8be.
 KPM_NEXT_KPIMG_REF = "eec45788c9a115e5498040298133336d6b6071dd"
 KPM_NEXT_KPIMG_SHA256 = "14fc6564fa092afe4a2293268cd061da64a20f61dc91396a404daf13d053f5ca"
-KPM_NEXT_KPIMG_URL = f"https://raw.githubusercontent.com/SukiSU-Ultra/SukiSU_patch/{KPM_NEXT_KPIMG_REF}/kpm/kpimg"
-KPM_NEXT_TOOLS_REPO = "https://github.com/SukiSU-Ultra/SukiSU_KernelPatch_patch.git"
+KPM_NEXT_KPIMG_URL = forgejo_raw_url("SukiSU_Patch", KPM_NEXT_KPIMG_REF, "kpm/kpimg")
+KPM_NEXT_TOOLS_REPO = f"{SUKISU_FORGEJO}/SukiSU_KernelPatch_patch.git"
 KPM_NEXT_TOOLS_REF = "1c5b608916357ac86a94cc736e235db1fac4a29d"
 KPM_NEXT_VERSION = "e00"   # KernelPatch 0.14.0: kptools -v and the kpimg must both say this
 KPM_NEXT_BRIDGE = {
@@ -821,6 +822,14 @@ CONFIG_CIFS_XATTR=y
                     # resolved commit below either way so the build record
                     # says exactly what went in.
                     self._chdir(repo_dir)
+                    # Same re-point as below: SukiSU_Patch moved to Forgejo
+                    # on 2026-11-16 (SUKISU_FORGEJO in config.py).
+                    cur = self._run_cmd("git remote get-url origin",
+                                        check=False, capture_output=True)
+                    cur_url = (cur.stdout or "").strip()
+                    if cur_url != url:
+                        logger.info(f"{name}: origin {cur_url or '(none)'} -> {url}")
+                        self._run_cmd(f"git remote set-url origin {url}", check=False)
                     self._run_cmd("git fetch origin", check=False)
                     self._run_cmd("git reset --hard @{u}", check=False)
                     self._chdir(self.workspace)
@@ -1312,7 +1321,11 @@ CONFIG_CIFS_XATTR=y
         """
         logger.info("=== Adding KernelSU ===")
         self._chdir(self.work_dir)
-        setup_url = (f"https://raw.githubusercontent.com/SukiSU-Ultra/SukiSU-Ultra/{self.config.kernelsu_commit}/kernel/setup.sh"
+        # setup.sh comes from SukiSU on Forgejo (see SUKISU_FORGEJO in
+        # config.py). setup.sh of commits before the move (c60f21b9 and
+        # older) clones github.com/SukiSU-Nova/SukiSU-Nova, which still has
+        # them; newer ones clone the Forgejo repo themselves.
+        setup_url = (forgejo_raw_url("SukiSU", self.config.kernelsu_commit, "kernel/setup.sh")
                     if self.config.kernelsu_commit else KSU_REPO_CONFIG["setup_script"])
         # setup.sh's argument is <commit-or-tag>, NOT a mode. See
         # DEFAULT_KSU_REF in config.py for the full story on why passing
@@ -1323,10 +1336,10 @@ CONFIG_CIFS_XATTR=y
         if self.config.kernelsu_commit and result.returncode != 0:
             raise RuntimeError(
                 f"kernelsu_commit '{self.config.kernelsu_commit}' could not be "
-                f"fetched from raw.githubusercontent.com/SukiSU-Ultra/SukiSU-Ultra "
+                f"fetched from {KSU_REPO_CONFIG['web_url']} "
                 f"- it likely doesn't exist (typo, or not a real tag/branch/commit). "
                 f"Refusing to silently fall back to the default setup script. "
-                f"Check available tags at https://github.com/SukiSU-Ultra/SukiSU-Ultra/tags"
+                f"Check available tags at {KSU_REPO_CONFIG['web_url']}/tags"
             )
         # Verify unconditionally - not just when --ksu-commit was passed.
         # setup.sh swallows a failed checkout (`git checkout "$1" && echo ...
@@ -1351,7 +1364,7 @@ CONFIG_CIFS_XATTR=y
                 f"not exist or not be reachable from the clone setup.sh made. "
                 f"Refusing to silently continue on whatever ref setup.sh left it "
                 f"on. Available tags: "
-                f"https://github.com/SukiSU-Ultra/SukiSU-Ultra/tags"
+                f"{KSU_REPO_CONFIG['web_url']}/tags"
             )
         # capture_output=True is required here: ShellCommand.run() defaults
         # to False, which streams straight to the console and leaves
@@ -1467,6 +1480,12 @@ CONFIG_CIFS_XATTR=y
     # 30000 / 4001 - with the old hard-coded values every Nova build failed
     # with "below SukiSU's VERSION_BASE". The constants below are only the
     # fallback for an old Kbuild without VERSION_BASE / VERSION_OFFSET lines.
+    #
+    # The move to Forgejo (7e0ca5d1 / b938c53c, 2026-11-16) also flipped the
+    # sign: KSU_VERSION = VERSION_BASE + LOCAL_COUNT + VERSION_OFFSET
+    # (30000 + 4004 + 996 = 35000), where every older Kbuild subtracts the
+    # offset. The sign is read from the KSU_VERSION line of the pinned Kbuild,
+    # so old and new commits both get the right LOCAL_COUNT.
     VERSION_BASE = 40000
     VERSION_OFFSET = 2815
 
@@ -1501,14 +1520,35 @@ CONFIG_CIFS_XATTR=y
 
         base = kbuild_int("VERSION_BASE", self.VERSION_BASE)
         offset = kbuild_int("VERSION_OFFSET", self.VERSION_OFFSET)
-        logger.info(f"SukiSU version formula from {target.name}: "
-                    f"{base} + LOCAL_COUNT - {offset}")
 
-        local_count = wanted - base + offset
+        # Sign of the offset, from the KSU_VERSION line itself:
+        #   expr $(VERSION_BASE) + $(LOCAL_COUNT) - $(VERSION_OFFSET)   (up to 30000)
+        #   expr $(VERSION_BASE) + $(LOCAL_COUNT) + $(VERSION_OFFSET)   (Forgejo, 35000+)
+        # A Kbuild with the VERSION_* lines but neither shape is refused
+        # rather than guessed. Without VERSION_* lines (very old Ultra) the
+        # old hard-coded "- offset" is kept.
+        signs = re.findall(
+            r"^KSU_VERSION\s*:=.*\$\(VERSION_BASE\)\s*\+\s*\$\(LOCAL_COUNT\)"
+            r"\s*([+-])\s*\$\(VERSION_OFFSET\)", text, re.MULTILINE)
+        has_vars = re.search(r"^VERSION_OFFSET\s*:=", text, re.MULTILINE) is not None
+        if len(signs) == 1:
+            sign = signs[0]
+        elif not signs and not has_vars:
+            sign = "-"
+        else:
+            raise RuntimeError(
+                f"{target} has VERSION_BASE / VERSION_OFFSET but {len(signs)} "
+                f"KSU_VERSION line(s) of the known shape - SukiSU's version "
+                f"formula has changed, refusing to guess."
+            )
+        logger.info(f"SukiSU version formula from {target.name}: "
+                    f"{base} + LOCAL_COUNT {sign} {offset}")
+
+        local_count = wanted - base + offset if sign == "-" else wanted - base - offset
         if local_count <= 0:
             raise RuntimeError(
                 f"--ksu-version-code {wanted} does not fit SukiSU's formula "
-                f"{base} + LOCAL_COUNT - {offset} ({target.name}): it would need "
+                f"{base} + LOCAL_COUNT {sign} {offset} ({target.name}): it would need "
                 f"LOCAL_COUNT={local_count}, which cannot be a commit count."
             )
         pattern = re.compile(
@@ -1526,7 +1566,7 @@ CONFIG_CIFS_XATTR=y
         logger.info(
             f"Pinned SukiSU version code to {wanted} "
             f"(LOCAL_COUNT={local_count}) in {target.name} - the build will no "
-            f"longer curl GitHub for main's live commit count."
+            f"longer ask the SukiSU server for main's live commit count."
         )
         self._mark("ksu_version_code", "applied",
                    f"{wanted} (LOCAL_COUNT={local_count})")

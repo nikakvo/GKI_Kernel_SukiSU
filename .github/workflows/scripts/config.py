@@ -131,9 +131,29 @@ DEFAULT_SUSFS_PINS = {
 # check-release.sh probes upstream master and rewrites this line too.
 DEFAULT_AMNEZIAWG_REF = "63ed35de3d3f135b17e8eae0b84949e7700303be"
 
-KSU_REPO_CONFIG = {"repo_url": "https://github.com/SukiSU-Ultra/SukiSU-Ultra.git",
+# SukiSU-Nova moved to ShirkNeko's own Forgejo server on 2026-11-16
+# (github.com/SukiSU-Nova/SukiSU-Nova stopped at c60f21b9 / 30000). SukiSU,
+# SukiSU_Patch and SukiSU_KernelPatch_patch are all taken from there; the
+# older commits we pin (c60f21b9, SukiSU_Patch eec4578 / 547ae94,
+# KernelPatch 1c5b608) carry the same hashes on both servers, and the kpimg
+# / patch_linux downloads stay sha256-checked. SUSFS stays on GitLab - the
+# Forgejo susfs4ksu has no gki-android13-5.15 branch.
+SUKISU_FORGEJO = "https://git.zako.shirkneko.top:20004/shirkneko"
+
+
+def forgejo_raw_url(repo: str, ref: str, path: str) -> str:
+    """Raw file URL on the Forgejo server. A full 40-hex SHA uses the
+    explicit /raw/commit/ form; a tag or branch name uses the short
+    /raw/<ref>/ form, which Forgejo resolves as branch, then tag."""
+    if re.fullmatch(r"[0-9a-f]{40}", ref or ""):
+        return f"{SUKISU_FORGEJO}/{repo}/raw/commit/{ref}/{path}"
+    return f"{SUKISU_FORGEJO}/{repo}/raw/{ref}/{path}"
+
+
+KSU_REPO_CONFIG = {"repo_url": f"{SUKISU_FORGEJO}/SukiSU.git",
                     "branch": "main",
-                    "setup_script": "https://raw.githubusercontent.com/SukiSU-Ultra/SukiSU-Ultra/main/kernel/setup.sh"}
+                    "web_url": f"{SUKISU_FORGEJO}/SukiSU",
+                    "setup_script": f"{SUKISU_FORGEJO}/SukiSU/raw/branch/main/kernel/setup.sh"}
 
 # SUSFS repository configuration
 #
@@ -162,7 +182,7 @@ SUSFS_BRANCH_REPOS = {
 }
 
 # SukiSU Patch repository configuration
-SUKISU_PATCH_REPO_CONFIG = {"repo_url": "https://github.com/ShirkNeko/SukiSU_patch.git"}
+SUKISU_PATCH_REPO_CONFIG = {"repo_url": f"{SUKISU_FORGEJO}/SukiSU_Patch.git"}
 
 # AnyKernel3 repository configuration
 ANYKERNEL_CONFIG = {"repo_url": "https://github.com/WildPlusKernel/AnyKernel3.git", "branch": "gki-2.0"}
@@ -183,7 +203,7 @@ LEGACY_FIXES = {
     "android12-5.10-below-136": {"url": "https://github.com/zzh20188/GKI_KernelSU_SUSFS/raw/refs/heads/legacy/fdinfo.c.patch", "min_sub_level": 136},
 }
 OP8E_PATCH_URL = "https://github.com/zzh20188/GKI_KernelSU_SUSFS/raw/refs/heads/dev/hmbird_patch.c"
-KPM_PATCH_URL = "https://raw.githubusercontent.com/ShirkNeko/SukiSU_patch/refs/heads/main/kpm/patch_linux"
+KPM_PATCH_URL = f"{SUKISU_FORGEJO}/SukiSU_Patch/raw/branch/main/kpm/patch_linux"
 
 
 @dataclass
