@@ -168,37 +168,90 @@ fi
 
 head_ "Root & hiding"
 
+KSUD=/data/adb/ksud
+
+# Root: everything below comes from the device itself, nothing is assumed
+# about which root solution, manager or version is installed.
+#   su -v   -> "<version>:<name>"   e.g. 3.0.0:KernelSU, 27.0:MAGISK
+#   su -V   -> version code          e.g. 35000
+#   ksud -V -> ksud version + uapi   (KernelSU-based root only)
+_suv=$(su -v 2>/dev/null | head -1)
+_suV=
+[ -n "$_suv" ] && _suV=$(su -V 2>/dev/null | head -1)
+_ksudv=
+[ -x "$KSUD" ] && _ksudv=$("$KSUD" -V 2>/dev/null | head -1)
+_rname=${_suv#*:}; _rver=${_suv%%:*}
+[ "$_rname" = "$_suv" ] && { _rname=; _rver=$_suv; }
+_rlabel="${_rname:-root} ${_rver}"
+case "$_suV" in ''|*[!0-9]*) ;; *) _rlabel="$_rlabel ($_suV)" ;; esac
+[ -z "$_suv" ] && _rlabel="KernelSU root (su -v gives nothing)"
+_rdet="su -v: ${_suv:-none}; su -V: ${_suV:-none}${_ksudv:+; ksud -V: $_ksudv}"
 if cfg_is CONFIG_KSU y; then
-    _sv=$(su -v 2>/dev/null)
-    row ok "SukiSU-Ultra (KernelSU root)" "CONFIG_KSU=y${_sv:+; su -v: $_sv}"
+    row ok "Root: $_rlabel" "CONFIG_KSU=y; $_rdet"
 else
-    row bad "SukiSU-Ultra (KernelSU root)" "CONFIG_KSU is not y"
+    row bad "Root: $_rlabel" "CONFIG_KSU is not y (kernel without built-in KernelSU); $_rdet"
 fi
 
-if cfg_is CONFIG_KSU_SUSFS y; then
-    _n=0; _miss=
-    for s in SUS_PATH SUS_MAP SUS_MOUNT SUS_KSTAT SPOOF_UNAME ENABLE_LOG \
-             HIDE_KSU_SUSFS_SYMBOLS SPOOF_CMDLINE_OR_BOOTCONFIG OPEN_REDIRECT; do
-        if cfg_is "CONFIG_KSU_SUSFS_$s" y; then
-            _n=$((_n+1))
-        else
-            _miss="$_miss $s"
-        fi
+# SUSFS. The version is read from the device, first source that answers:
+#   ksud susfs version           (SukiSU-based ksud)
+#   ksu_susfs show version       (susfs4ksu module tool)
+#   dmesg "susfs is initialized! version: vX.Y.Z"   (boot log, may have rolled)
+# The options are every CONFIG_KSU_SUSFS_* symbol this kernel's own config
+# has - no fixed list, so new or removed SUSFS options are shown as they are.
+# Sets SUSFS_VER / SUSFS_SRC directly (no subshell, no separator to split -
+# Android's mksh treated the old "ver|source" split differently from dash).
+SUSFS_VER=; SUSFS_SRC=
+susfs_version() {
+    if [ -x "$KSUD" ]; then
+        _v=$("$KSUD" susfs version 2>&1 | head -1)
+        case "$_v" in v[0-9]*|[0-9]*.[0-9]*) SUSFS_VER=$_v; SUSFS_SRC="ksud susfs version"; return ;; esac
+    fi
+    for _b in /data/adb/ksu/bin/ksu_susfs /data/adb/ap/bin/ksu_susfs /data/adb/modules/susfs4ksu/ksu_susfs; do
+        [ -x "$_b" ] || continue
+        _v=$("$_b" show version 2>&1 | head -1)
+        case "$_v" in v[0-9]*|[0-9]*.[0-9]*) SUSFS_VER=$_v; SUSFS_SRC="$_b show version"; return ;; esac
     done
-    if [ "$_n" = 9 ]; then
-        row ok "SUSFS v2.3.0 (9/9 options)" "all sub-options enabled"
+    _v=$(dmesg 2>/dev/null | sed -n 's/.*susfs is initialized! version: \(v[0-9][0-9.]*\).*/\1/p' | tail -1)
+    [ -n "$_v" ] && { SUSFS_VER=$_v; SUSFS_SRC="boot log"; }
+}
+
+if cfg_is CONFIG_KSU_SUSFS y; then
+    susfs_version
+    _sver=$SUSFS_VER; _ssrc=$SUSFS_SRC
+    _son=$(grep -c '^CONFIG_KSU_SUSFS_[A-Z0-9_]*=y' "$CFG" 2>/dev/null)
+    _soff=$(grep -c '^# CONFIG_KSU_SUSFS_[A-Z0-9_]* is not set' "$CFG" 2>/dev/null)
+    _sall=$((_son + _soff))
+    _slist=$(grep '^CONFIG_KSU_SUSFS_[A-Z0-9_]*=y' "$CFG" 2>/dev/null | sed 's/^CONFIG_KSU_SUSFS_//; s/=y$//' | tr '\n' ' ' | sed 's/ $//')
+    _sofflist=$(grep '^# CONFIG_KSU_SUSFS_[A-Z0-9_]* is not set' "$CFG" 2>/dev/null | sed 's/^# CONFIG_KSU_SUSFS_//; s/ is not set$//' | tr '\n' ' ' | sed 's/ $//')
+    _sdet="enabled: ${_slist:-none}"
+    [ -n "$_sofflist" ] && _sdet="$_sdet; off in this kernel: $_sofflist"
+    if [ -n "$_sver" ]; then
+        _sdet="$_sdet; version from: $_ssrc"
+        row ok "SUSFS $_sver ($_son/$_sall options)" "$_sdet"
     else
-        # SUS_PATH is deliberately off on 6.6 - not a fault there.
-        row bad "SUSFS v2.3.0 ($_n/9 options)" "missing:$_miss"
+        row ok "SUSFS ($_son/$_sall options)" \
+            "$_sdet; version not readable - needs root and ksud, the ksu_susfs tool or the boot log"
+    fi
+    # SukiSU's ksud also reports how SUSFS is wired in and what it runs.
+    if [ -x "$KSUD" ] && "$KSUD" susfs version >/dev/null 2>&1; then
+        _simpl=$("$KSUD" susfs implementation 2>/dev/null | head -1)
+        _svar=$("$KSUD" susfs variant 2>/dev/null | head -1)
+        _sst=$("$KSUD" susfs status 2>/dev/null | head -1)
+        _sfeat=$("$KSUD" susfs features 2>/dev/null | tr '\n' ' ' | sed 's/  */ /g; s/ $//')
+        _sinfo=
+        [ -n "$_simpl" ] && _sinfo="implementation: $_simpl"
+        [ -n "$_svar" ]  && _sinfo="${_sinfo:+$_sinfo; }variant: $_svar"
+        [ -n "$_sst" ]   && _sinfo="${_sinfo:+$_sinfo; }status: $_sst"
+        [ -n "$_sinfo" ] && row ok "SUSFS: runtime" "$_sinfo"
+        [ -n "$_sfeat" ] && row ok "SUSFS: features (ksud)" "$_sfeat"
     fi
 else
-    row bad "SUSFS v2.3.0" "CONFIG_KSU_SUSFS is not y - SUSFS is absent"
+    row bad "SUSFS" "CONFIG_KSU_SUSFS is not y - SUSFS is absent"
 fi
 
 # KPM. The KernelPatch version comes from ksud (needs root):
 #   3328 = 0.13.0 (older builds, --kpm-legacy), 3337 = 0.13.9 (v41042..v41094),
 #   3584 = 0.14.0 (v41097 and newer).
-KSUD=/data/adb/ksud
 KP_VER=; KP_DOT=; KP_RAW=
 if cfg_is CONFIG_KPM y && [ -x "$KSUD" ] && [ "$(id -u)" = 0 ]; then
     # ksud prints e.g. "3337 (17:50:49 Oct 17 2026)" - number, then build time
@@ -262,9 +315,6 @@ else
         "userspace feature, no kernel symbol - only visible once a root module is active"
 fi
 
-row na "Safe Mode Removal" \
-    "source patch, leaves no runtime marker; off by default in this pipeline (--disable-safemode)"
-
 # ---------------------------------------------------------- networking
 
 head_ "Networking"
@@ -297,7 +347,7 @@ if cfg_is CONFIG_NET_SCH_CAKE y; then
     if have tc && [ "$(id -u)" = 0 ]; then
         if tc qdisc add dev lo root cake >/dev/null 2>&1; then
             tc qdisc del dev lo root >/dev/null 2>&1
-            row ok "CAKE qdisc" "CONFIG_NET_SCH_CAKE=y; attached to lo successfully"
+            row ok "CAKE qdisc" "CONFIG_NET_SCH_CAKE=y; test cake qdisc attached to lo and removed - the kernel scheduler works"
         else
             row bad "CAKE qdisc" "CONFIG_NET_SCH_CAKE=y but 'tc qdisc add ... cake' failed"
         fi
@@ -326,7 +376,7 @@ else
     elif have ip && [ "$(id -u)" = 0 ]; then
         if ip link add gkichk_awg type amneziawg >/dev/null 2>&1; then
             ip link del gkichk_awg >/dev/null 2>&1
-            row ok "AmneziaWG $_awgver" "CONFIG_AMNEZIAWG=y; amneziawg interface created and removed"
+            row ok "AmneziaWG $_awgver" "CONFIG_AMNEZIAWG=y; test interface gkichk_awg of type amneziawg created and deleted - the kernel driver works"
         else
             row bad "AmneziaWG $_awgver" "CONFIG_AMNEZIAWG=y but 'ip link add ... type amneziawg' failed"
         fi
@@ -339,7 +389,7 @@ if cfg_is CONFIG_IP_SET y; then
     if have ipset && [ "$(id -u)" = 0 ]; then
         if ipset create gkichk hash:ip >/dev/null 2>&1; then
             ipset destroy gkichk >/dev/null 2>&1
-            row ok "IP Set (netfilter)" "CONFIG_IP_SET=y; set created and destroyed"
+            row ok "IP Set (netfilter)" "CONFIG_IP_SET=y; test set gkichk (hash:ip) created and deleted - the kernel ipset works"
         else
             row bad "IP Set (netfilter)" "CONFIG_IP_SET=y but 'ipset create' failed"
         fi
@@ -355,7 +405,7 @@ if cfg_is CONFIG_IP_NF_TARGET_TTL y || cfg_is CONFIG_NETFILTER_XT_TARGET_HL y; t
     if have iptables && [ "$(id -u)" = 0 ] &&
        iptables -t mangle -A POSTROUTING -j TTL --ttl-set 65 >/dev/null 2>&1; then
         iptables -t mangle -D POSTROUTING -j TTL --ttl-set 65 >/dev/null 2>&1
-        row ok "TTL / Hop-Limit target" "rule added and removed successfully"
+        row ok "TTL / Hop-Limit target" "test rule (mangle POSTROUTING -j TTL --ttl-set 65) added and deleted - the TTL target works"
     else
         row ok "TTL / Hop-Limit target" \
             "CONFIG_IP_NF_TARGET_TTL=$(cfg CONFIG_IP_NF_TARGET_TTL 2>/dev/null) (runtime test skipped)"
@@ -368,7 +418,7 @@ if cfg_is CONFIG_NETFILTER_XT_TARGET_CONNMARK y; then
     if have iptables && [ "$(id -u)" = 0 ] &&
        iptables -t mangle -A POSTROUTING -j CONNMARK --set-mark 1 >/dev/null 2>&1; then
         iptables -t mangle -D POSTROUTING -j CONNMARK --set-mark 1 >/dev/null 2>&1
-        row ok "Connection mark (connmark)" "rule added and removed successfully"
+        row ok "Connection mark (connmark)" "test rule (mangle POSTROUTING -j CONNMARK --set-mark 1) added and deleted - connmark works"
     else
         row ok "Connection mark (connmark)" \
             "CONFIG_NETFILTER_XT_TARGET_CONNMARK=y (runtime test skipped)"
@@ -438,9 +488,9 @@ else
 fi
 
 if cfg_is CONFIG_LTO_CLANG_FULL y; then
-    row ok "LTO: Full" "CONFIG_LTO_CLANG_FULL=y (local/release build)"
+    row ok "LTO: Full" "CONFIG_LTO_CLANG_FULL=y"
 elif cfg_is CONFIG_LTO_CLANG_THIN y; then
-    row ok "LTO: Thin" "CONFIG_LTO_CLANG_THIN=y (CI build - Full needs ~27 GB RAM)"
+    row ok "LTO: Thin" "CONFIG_LTO_CLANG_THIN=y"
 elif cfg_is CONFIG_LTO_NONE y; then
     row bad "LTO" "CONFIG_LTO_NONE=y - this kernel was built with LTO disabled"
 else
@@ -469,14 +519,38 @@ fi
 if [ -n "$_dsmiss" ]; then
     row off "Droidspaces macvlan networking" "needs a --droidspaces build"
 elif cfg_is CONFIG_MACVLAN y; then
-    if have ip && [ "$(id -u)" = 0 ] && [ -e /sys/class/net/wlan0 ] &&
-       ip link add gkichk_mv link wlan0 type macvlan mode bridge >/dev/null 2>&1; then
-        ip link del gkichk_mv >/dev/null 2>&1
+    # Runtime test on a throw-away dummy parent when the kernel has the dummy
+    # driver (no hardware involved), otherwise on wlan0. Wi-Fi in client
+    # mode often refuses extra MAC addresses, so a wlan0 failure is shown as
+    # it is, not counted as missing.
+    if ! have ip || [ "$(id -u)" != 0 ]; then
         row ok "Droidspaces macvlan networking" \
-            "CONFIG_MACVLAN=y; macvlan on wlan0 created and removed"
+            "CONFIG_MACVLAN=y (runtime test skipped - needs root and the ip binary)"
+    elif ip link add gkichk_dm type dummy >/dev/null 2>&1; then
+        _mverr=$(ip link add gkichk_mv link gkichk_dm type macvlan mode bridge 2>&1)
+        _mvrc=$?
+        ip link del gkichk_mv >/dev/null 2>&1; ip link del gkichk_dm >/dev/null 2>&1
+        if [ "$_mvrc" = 0 ]; then
+            row ok "Droidspaces macvlan networking" \
+                "CONFIG_MACVLAN=y; macvlan on a test dummy interface created and deleted"
+        else
+            row bad "Droidspaces macvlan networking" \
+                "CONFIG_MACVLAN=y but creating a macvlan failed: ${_mverr:-ip returned $_mvrc}"
+        fi
+    elif [ -e /sys/class/net/wlan0 ]; then
+        _mverr=$(ip link add gkichk_mv link wlan0 type macvlan mode bridge 2>&1)
+        _mvrc=$?
+        ip link del gkichk_mv >/dev/null 2>&1
+        if [ "$_mvrc" = 0 ]; then
+            row ok "Droidspaces macvlan networking" \
+                "CONFIG_MACVLAN=y; macvlan on wlan0 created and deleted"
+        else
+            row na "Droidspaces macvlan networking" \
+                "CONFIG_MACVLAN=y; no dummy driver for a clean test, and wlan0 refused a macvlan: ${_mverr:-ip returned $_mvrc}"
+        fi
     else
         row ok "Droidspaces macvlan networking" \
-            "CONFIG_MACVLAN=y (runtime test skipped - no ip binary, no wlan0 or not root)"
+            "CONFIG_MACVLAN=y (runtime test skipped - no dummy driver and no wlan0)"
     fi
 else
     row off "Droidspaces macvlan networking" \
