@@ -785,11 +785,24 @@ CONFIG_CIFS_XATTR=y
             ("Kernel Patches", self.kernel_patches_dir, KERNEL_PATCHES_CONFIG['repo_url'], None),
         ]:
             if not repo_dir.exists():
-                cmd = f"git clone {url}"
+                # Always clone into the directory name the builder reads
+                # (repo_dir.name), never the name git derives from the URL:
+                # on Forgejo the repo is "SukiSU_Patch" (capital P) while the
+                # builder reads "SukiSU_patch", and Linux is case-sensitive -
+                # the first nova build silently lost LZ4KD ZRAM, hide_stuff
+                # and the task_mmu fixes that way.
+                cmd = f"git clone {url} {repo_dir.name}"
                 if branch:
                     cmd += f" -b {branch}"
                 logger.info(f"Cloning {name}...")
                 result = self._run_cmd(cmd, check=False)
+                if name == "SukiSU Patch" and (result.returncode != 0 or not repo_dir.is_dir()):
+                    raise RuntimeError(
+                        f"Failed to clone SukiSU_Patch from {url} into {repo_dir} "
+                        f"(git clone exit code {result.returncode}). It supplies the "
+                        f"LZ4KD ZRAM sources and 69_hide_stuff.patch - building "
+                        f"without it would silently drop those features. Stopping."
+                    )
                 if name == "SUSFS" and result.returncode != 0:
                     retry = _clone_susfs_with_fallback(url, branch, result.returncode)
                     if retry is not None and retry.returncode == 0:
