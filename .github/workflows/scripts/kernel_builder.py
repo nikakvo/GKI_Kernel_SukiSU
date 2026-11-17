@@ -1345,6 +1345,15 @@ CONFIG_CIFS_XATTR=y
         # "builtin" here silently built SukiSU-Ultra's divergent `builtin`
         # branch and broke SUSFS patching.
         ksu_ref = self.config.kernelsu_commit or DEFAULT_KSU_REF
+        # Clone SukiSU ourselves, in full, before setup.sh runs. setup.sh
+        # only clones when KernelSU/ is missing (`test -d KernelSU || git
+        # clone ...`), and its own clone can't always check out an older
+        # pin: on GitHub Actions (2026-11-17) the pin b938c53c failed with
+        # "unable to read tree" as soon as Forgejo main had moved past it
+        # (it built fine the day before, while main was still b938c53c).
+        # A full clone of KSU_REPO_CONFIG has every commit we pin - the
+        # commits from before the move keep their hashes on Forgejo.
+        self._prepare_ksu_clone(self.work_dir / "KernelSU")
         result = self._run_cmd(f"curl -LSsf {setup_url} | bash -s {ksu_ref}", check=False)
         if self.config.kernelsu_commit and result.returncode != 0:
             raise RuntimeError(
@@ -1400,6 +1409,37 @@ CONFIG_CIFS_XATTR=y
                 "in a shape _fixup_sukisu_kpm_uapi_include() doesn't know. "
                 "A KPM build would not compile. Stopping."
             )
+
+    def _prepare_ksu_clone(self, ksu_dir: Path):
+        """Full (no --depth, no --filter) clone of SukiSU into KernelSU/,
+        made before setup.sh so setup.sh reuses it instead of cloning.
+        A KernelSU/ left from an earlier run is re-pointed and fetched; a
+        shallow or partial one is deleted and cloned again, since it can be
+        missing the pinned commit."""
+        url = KSU_REPO_CONFIG["repo_url"]
+        git_dir = ksu_dir / ".git"
+        if git_dir.is_dir():
+            shallow = (git_dir / "shallow").exists()
+            promisor = self._run_cmd(
+                f"git -C {ksu_dir} config --get remote.origin.promisor",
+                check=False, capture_output=True)
+            if shallow or (promisor.stdout or "").strip() == "true":
+                logger.info("KernelSU/ is a shallow or partial clone - cloning it again in full")
+                shutil.rmtree(ksu_dir)
+            else:
+                self._run_cmd(f"git -C {ksu_dir} remote set-url origin {url}", check=False)
+                fetched = self._run_cmd(f"git -C {ksu_dir} fetch --tags --force origin", check=False)
+                if fetched.returncode != 0:
+                    raise RuntimeError(
+                        f"Could not fetch SukiSU from {url} into the existing {ksu_dir}. Stopping.")
+                return
+        elif ksu_dir.exists():
+            raise RuntimeError(
+                f"{ksu_dir} exists but is not a git clone - can't tell which SukiSU it "
+                f"holds. Delete it and run again.")
+        cloned = self._run_cmd(f"git clone {url} {ksu_dir}", check=False)
+        if cloned.returncode != 0:
+            raise RuntimeError(f"Could not clone SukiSU from {url}. Stopping.")
 
     def _fixup_sukisu_kpm_uapi_include(self, ksu_dir) -> bool:
         # Upstream SukiSU-Ultra bug, not SUSFS related. edf86467 ("unify
