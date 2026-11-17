@@ -1345,15 +1345,15 @@ CONFIG_CIFS_XATTR=y
         # "builtin" here silently built SukiSU-Ultra's divergent `builtin`
         # branch and broke SUSFS patching.
         ksu_ref = self.config.kernelsu_commit or DEFAULT_KSU_REF
-        # Clone SukiSU ourselves, in full, before setup.sh runs. setup.sh
-        # only clones when KernelSU/ is missing (`test -d KernelSU || git
-        # clone ...`), and its own clone can't always check out an older
-        # pin: on GitHub Actions (2026-11-17) the pin b938c53c failed with
-        # "unable to read tree" as soon as Forgejo main had moved past it
-        # (it built fine the day before, while main was still b938c53c).
-        # A full clone of KSU_REPO_CONFIG has every commit we pin - the
-        # commits from before the move keep their hashes on Forgejo.
-        self._prepare_ksu_clone(self.work_dir / "KernelSU")
+        # Clone SukiSU ourselves before setup.sh runs, and fetch the pin
+        # into it. setup.sh only clones when KernelSU/ is missing (`test -d
+        # KernelSU || git clone ...`), and a clone holds only what branches
+        # and tags reach: on 2026-11-17 Forgejo main was rewritten and tag
+        # v3.0.0 moved to a900f6d8, the pin b938c53c (35000) was left on no
+        # branch or tag, and every build of it failed with "unable to read
+        # tree" (it built the day before, while main was still b938c53c).
+        # Forgejo still serves such a commit when it is fetched by hash.
+        self._prepare_ksu_clone(self.work_dir / "KernelSU", ksu_ref)
         result = self._run_cmd(f"curl -LSsf {setup_url} | bash -s {ksu_ref}", check=False)
         if self.config.kernelsu_commit and result.returncode != 0:
             raise RuntimeError(
@@ -1410,12 +1410,13 @@ CONFIG_CIFS_XATTR=y
                 "A KPM build would not compile. Stopping."
             )
 
-    def _prepare_ksu_clone(self, ksu_dir: Path):
+    def _prepare_ksu_clone(self, ksu_dir: Path, ksu_ref: str):
         """Full (no --depth, no --filter) clone of SukiSU into KernelSU/,
-        made before setup.sh so setup.sh reuses it instead of cloning.
-        A KernelSU/ left from an earlier run is re-pointed and fetched; a
-        shallow or partial one is deleted and cloned again, since it can be
-        missing the pinned commit."""
+        made before setup.sh so setup.sh reuses it instead of cloning, with
+        every tag fetched and the pinned commit fetched by hash if no
+        branch or tag reaches it. A KernelSU/ left from an earlier run is
+        re-pointed and fetched; a shallow or partial one is deleted and
+        cloned again."""
         url = KSU_REPO_CONFIG["repo_url"]
         git_dir = ksu_dir / ".git"
         if git_dir.is_dir():
@@ -1428,10 +1429,7 @@ CONFIG_CIFS_XATTR=y
                 shutil.rmtree(ksu_dir)
             else:
                 self._run_cmd(f"git -C {ksu_dir} remote set-url origin {url}", check=False)
-                fetched = self._run_cmd(f"git -C {ksu_dir} fetch --tags --force origin", check=False)
-                if fetched.returncode != 0:
-                    raise RuntimeError(
-                        f"Could not fetch SukiSU from {url} into the existing {ksu_dir}. Stopping.")
+                self._fetch_ksu_pin(ksu_dir, ksu_ref)
                 return
         elif ksu_dir.exists():
             raise RuntimeError(
@@ -1440,6 +1438,24 @@ CONFIG_CIFS_XATTR=y
         cloned = self._run_cmd(f"git clone {url} {ksu_dir}", check=False)
         if cloned.returncode != 0:
             raise RuntimeError(f"Could not clone SukiSU from {url}. Stopping.")
+        self._fetch_ksu_pin(ksu_dir, ksu_ref)
+
+    def _fetch_ksu_pin(self, ksu_dir: Path, ksu_ref: str):
+        """All tags (a clone only gets the tags its branches reach), then
+        the pinned commit itself by hash when nothing fetched holds it.
+        A pin that still isn't there is left to add_kernelsu()'s checkout,
+        which stops the build with the reason."""
+        fetched = self._run_cmd(f"git -C {ksu_dir} fetch --tags --force origin", check=False)
+        if fetched.returncode != 0:
+            raise RuntimeError(
+                f"Could not fetch SukiSU tags from {KSU_REPO_CONFIG['repo_url']}. Stopping.")
+        have = self._run_cmd(f"git -C {ksu_dir} rev-parse --verify -q '{ksu_ref}^{{commit}}'",
+                             check=False, capture_output=True)
+        if have.returncode == 0:
+            return
+        if re.fullmatch(r"[0-9a-f]{40}", ksu_ref):
+            logger.info(f"SukiSU {ksu_ref[:12]} is on no branch or tag - fetching it by hash")
+            self._run_cmd(f"git -C {ksu_dir} fetch origin {ksu_ref}", check=False)
 
     def _fixup_sukisu_kpm_uapi_include(self, ksu_dir) -> bool:
         # Upstream SukiSU-Ultra bug, not SUSFS related. edf86467 ("unify
