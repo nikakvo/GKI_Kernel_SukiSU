@@ -5,8 +5,8 @@
 #
 # build-kernel.sh and the GitHub Actions workflows run it after a successful
 # build. By hand, from this folder (ath9k-module/):
-#   ./make-ath9k-module.sh                       # newest ~/gki-workspace-nova/android13-5.15-*/ath9k-modules
-#   ./make-ath9k-module.sh ~/gki-workspace-nova/android13-5.15-223/ath9k-modules
+#   ./make-ath9k-module.sh                       # newest ~/gki-workspace/android13-5.15-*/ath9k-modules
+#   ./make-ath9k-module.sh ~/gki-workspace/android13-5.15-223/ath9k-modules
 #   ./make-ath9k-module.sh <ath9k-modules dir> <htc_9271-1.4.0.fw>
 #
 # Output: ath9k_htc_vermeer-<kernel version>.zip (e.g. ath9k_htc_vermeer-5.15.223.zip)
@@ -14,7 +14,7 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-WORKSPACE="$HOME/gki-workspace-nova"   # NOVA / Forgejo copy
+WORKSPACE="$HOME/gki-workspace"
 SRC="$SCRIPT_DIR/ath9k-htc-vermeer"
 FW_SRC="${2:-$SCRIPT_DIR/../.github/workflows/scripts/firmware/ath9k_htc/htc_9271-1.4.0.fw}"
 

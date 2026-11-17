@@ -43,7 +43,7 @@ def parse_args() -> argparse.Namespace:
                         help="Label only (shown in the Telegram notification). "
                              "Does not select any source - use --ksu-commit for that.")
     parser.add_argument("--ksu-commit", default=None,
-                        help=f"SukiSU-Ultra tag/branch/commit. Default: the known-good "
+                        help=f"SukiSU tag/branch/commit. Default: the known-good "
                              f"DEFAULT_KSU_REF in config.py ({DEFAULT_KSU_REF[:8]}). "
                              f"Pass 'main' to track the moving branch.")
     parser.add_argument("--ksu-version-code", type=int, default=None,
@@ -185,9 +185,9 @@ def resolve_pins(args: argparse.Namespace):
     elif susfs.lower() in ("latest", "head"):
         susfs = None
 
-    logger.info(f"SukiSU-Ultra ref:  {ksu_ref}"
+    logger.info(f"SukiSU ref:        {ksu_ref}"
                 + (" (default, config.py)" if not args.ksu_commit else ""))
-    logger.info(f"KSU version code:  {code if code else 'live GitHub count'}")
+    logger.info(f"KSU version code:  {code if code else 'live Forgejo count'}")
     logger.info(f"susfs pin(s):      {susfs or 'branch HEAD'}"
                 + (" (default, config.py)" if not args.susfs_commit else ""))
 

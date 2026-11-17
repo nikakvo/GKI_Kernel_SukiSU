@@ -47,7 +47,7 @@ into the kernel. Changes made by this repository
 
 ## Fetched at build time (not stored in this repository)
 
-The Linux kernel source (Android Common Kernel, GPL-2.0), SukiSU-Ultra,
+The Linux kernel source (Android Common Kernel, GPL-2.0), SukiSU-Nova,
 susfs4ksu, AnyKernel3, the toolchains and every other component downloaded
 during a build keep their own licenses.
 
@@ -56,6 +56,6 @@ during a build keep their own licenses.
 The kernel images and AnyKernel3 packages published under Releases are builds
 of the Linux kernel and are distributed under the **GPL-2.0**. Their
 corresponding source is the Android Common Kernel commit stated in each
-release's notes, plus the patches in this repository and the SukiSU-Ultra /
+release's notes, plus the patches in this repository and the SukiSU-Nova /
 SUSFS / AmneziaWG commits pinned in `.github/workflows/scripts/config.py` for
 that release.

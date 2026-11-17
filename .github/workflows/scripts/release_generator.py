@@ -1,47 +1,25 @@
 #!/usr/bin/env python3
 import json
-import urllib.request
-import ssl
 import sys
 from pathlib import Path
 import sys as _sys
 _sys.path.insert(0, str(Path(__file__).parent))
+from config import KERNEL_VERSION  # SUSFS version, read from susfs.h on GitLab
 
 
 class ReleaseGenerator:
     def __init__(self):
         self.matrix_path = Path(__file__).parent.parent / "config" / "matrix.json"
-        self.ssl_ctx = ssl.create_default_context()
-        self.ssl_ctx.check_hostname = False
-        self.ssl_ctx.verify_mode = ssl.CERT_NONE
 
     def load_matrix(self) -> dict:
         with open(self.matrix_path, 'r') as f:
             return json.load(f)
 
-    def _fetch_json(self, url: str) -> dict:
-        try:
-            req = urllib.request.Request(url, headers={'User-Agent': 'Python'})
-            with urllib.request.urlopen(req, context=self.ssl_ctx) as response:
-                return json.loads(response.read())
-        except Exception:
-            return {}
-
-    def get_ksu_info(self) -> tuple:
-        ksu_tag, ksu_commit = "latest", "unknown"
-        tags = self._fetch_json("https://api.github.com/repos/SukiSU-Ultra/SukiSU-Ultra/git/refs/tags")
-        if tags:
-            ksu_tag = tags[-1]['ref'].split('/')[-1]
-        ref = self._fetch_json("https://api.github.com/repos/SukiSU-Ultra/SukiSU-Ultra/git/ref/heads/main")
-        if ref:
-            ksu_commit = ref['object']['sha'][:7]
-        return ksu_tag, ksu_commit
-
     def generate_body(self, lto_mode: str = "thin") -> str:
         lto_feature_line = "- Full LTO" if lto_mode == "full" else "- Thin LTO"
         return f"""## Features
 
-- SUSFS v2.3.0
+- SUSFS {KERNEL_VERSION}
 - KPM Support (Kernel Patch Module)
 - Magic Mount Support
 - BBR v3 Support

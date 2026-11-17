@@ -8,7 +8,7 @@ on:
   workflow_dispatch:
     inputs:
       kernelsu_commit:
-        description: 'SukiSU-Ultra tag/branch/commit. Leave empty for the known-good pin in config.py (DEFAULT_KSU_REF - what the latest release was built from). "main" tracks the moving branch.'
+        description: 'SukiSU tag/branch/commit. Leave empty for the known-good pin in config.py (DEFAULT_KSU_REF - what the latest release was built from). "main" tracks the moving branch.'
         required: false
         type: string
         default: ''
@@ -115,7 +115,7 @@ on:
         type: string
         default: ''
       release_tag:
-        description: 'Release tag (optional, e.g. v4.1.3 to match the current SukiSU-Ultra Manager version). Leave empty to auto-use the current SUSFS version (e.g. v2.2.0) like before. Must be a valid git tag name (no spaces) and not already used by an existing release/tag in this repo.'
+        description: 'Release tag (optional, e.g. v4.1.3 to match the current SukiSU Manager version). Leave empty to auto-use the current SUSFS version (e.g. v2.2.0) like before. Must be a valid git tag name (no spaces) and not already used by an existing release/tag in this repo.'
         required: false
         type: string
         default: ''

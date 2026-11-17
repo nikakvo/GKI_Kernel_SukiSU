@@ -12,8 +12,9 @@ def get_susfs_version() -> str:
     ssl_ctx.check_hostname = False
     ssl_ctx.verify_mode = ssl.CERT_NONE
 
-    # Try multiple branches to get the version number
-    branches = ["gki-android15-6.6", "gki-android14-6.1", "gki-android13-5.15", "gki-android12-5.10", "main"]
+    # Try multiple branches to get the version number - android13-5.15 first,
+    # the branch that is built, flashed and released
+    branches = ["gki-android13-5.15", "gki-android14-6.1", "gki-android15-6.6", "gki-android12-5.10", "main"]
     version_pattern = re.compile(r'#define\s+SUSFS_VERSION\s+"([^"]+)"')
 
     for branch in branches:

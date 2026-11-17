@@ -1,10 +1,10 @@
 <p align="center"><img src="gki-kernel-v2.png" alt="GKI Kernel SukiSU"></p>
 
-# GKI Kernel SukiSU-Ultra + SUSFS - Poco F6 Pro
+# GKI Kernel SukiSU-Nova + SUSFS - Poco F6 Pro
 
-A **GKI kernel** with **SukiSU-Ultra** (root) and **SUSFS** (root hiding) built in, plus networking, memory and container extras. Built, flashed and daily-driven on the **Poco F6 Pro / Redmi K70 (`vermeer`)**, and published together with the build system that makes it.
+A **GKI kernel** with **SukiSU-Nova** (root) and **SUSFS** (root hiding) built in, plus networking, memory and container extras. Built, flashed and daily-driven on the **Poco F6 Pro / Redmi K70 (`vermeer`)**, and published together with the build system that makes it.
 
-Download the latest build from **[Releases](https://github.com/nikakvo/GKI_Kernel_SukiSU/releases)**. Each release lists its exact kernel, SukiSU-Ultra and SUSFS versions and the matching manager.
+Download the latest build from **[Releases](https://github.com/nikakvo/GKI_Kernel_SukiSU/releases)**. Each release lists its exact kernel, SukiSU-Nova and SUSFS versions and the matching Manager.
 
 **Have a question? Read the [FAQ](#faq) first - the common ones are answered there.**
 
@@ -30,7 +30,7 @@ Download the latest build from **[Releases](https://github.com/nikakvo/GKI_Kerne
 
 | Feature | What it gives you |
 |---------|-------------------|
-| **[SukiSU-Ultra](https://github.com/SukiSU-Ultra/SukiSU-Ultra)** | Kernel-level root (built in, not LKM), with module preinit support |
+| **[SukiSU-Nova](https://git.zako.shirkneko.top:20004/shirkneko/SukiSU)** | Kernel-level root (built in, not LKM), with module preinit support |
 | **[SUSFS v2.3.0](https://gitlab.com/simonpunk/susfs4ksu)** | Kernel-side root hiding (paths, mounts, uname/cmdline spoofing). Needs the [userspace module](#susfs-userspace) |
 | **KPM** | Load KernelPatch modules at runtime |
 | **BBR v3** | Newer TCP congestion control (falls back to BBR v1 if the patch doesn't fit) |
@@ -76,7 +76,7 @@ Add `-v` to see the measured values, or `--no-color` for text to paste into an i
      fastboot flash boot_ab <boot.img> # install on both slots
      ```
    - **AnyKernel3 zip** from a custom recovery or a kernel flasher app such as [HorizonKernelFlasher](https://github.com/libxzr/HorizonKernelFlasher/releases).
-3. Install the **SukiSU-Ultra manager named in the release notes**. Kernel and manager must report the same version number, otherwise the manager shows a mismatch. The official tagged manager APK usually does **not** match - use the one linked in the release.
+3. Install the **SukiSU-Nova Manager named in the release notes**. Kernel and Manager must report the same version number, otherwise the Manager shows a mismatch - don't use any other Manager build with this kernel.
 4. Open the manager: it should show **Working** and **Built-in**.
 
 <a id="susfs-userspace"></a>
@@ -112,7 +112,7 @@ I don't run detector apps and I don't publish detector results. The test that ma
 
 Detector apps are made to find every possible trace of root or kernel changes, far more than any real app checks. Chasing a clean detector score often means breaking a setup that already works, just to make one test app happy. That is not the goal of this kernel.
 
-The kernel gives you the tools (SukiSU-Ultra and the SUSFS kernel side). What gets hidden depends on the [SUSFS userspace module](#susfs-userspace) and how you configure it, not on the kernel alone.
+The kernel gives you the tools (SukiSU-Nova and the SUSFS kernel side). What gets hidden depends on the [SUSFS userspace module](#susfs-userspace) and how you configure it, not on the kernel alone.
 
 **A green screen in a detector doesn't pay your bills.** 😄
 
@@ -142,7 +142,7 @@ The features are the same in all modes. Release builds are Full LTO; GitHub Acti
 <a id="faq-manager"></a>
 ### 5. The manager shows a version mismatch
 
-Use the **SukiSU-Ultra manager linked in the release notes**. The official tagged manager APK usually reports a different version number than the kernel.
+Use the **SukiSU-Nova Manager linked in the release notes**. Any other Manager build can report a different version number than the kernel.
 
 <a id="faq-features"></a>
 ### 6. How do I know a feature is working?
@@ -174,7 +174,7 @@ cd GKI_Kernel_SukiSU
 
 Every build starts from a clean tree: if `~/gki-workspace/<android>-<kernel>-<sub_level>` still holds a previous (or interrupted) build, it is deleted first, and that build's zips, boot images and `ath9k-modules/` are moved to `~/gki-workspace/previous-<android>-<kernel>-<sub_level>/` (only the last one is kept). `cleanup-workspace.sh` is still there to free the disk space by hand. After a successful build, the same folder also holds everything a release needs: the boot image, the AnyKernel3 zip, the flashable `ath9k_htc_vermeer-<kernel version>.zip` (packed by `ath9k-module/make-ath9k-module.sh`), `check-features.sh`, a copy of the build log, `PATCH_STATUS.json` and `BUILD_REPORT.txt`.
 
-With no flags it builds **exactly the SukiSU-Ultra / SUSFS combination of the latest release**. The pins live at the top of `.github/workflows/scripts/config.py`.
+With no flags it builds **exactly the SukiSU-Nova / SUSFS combination of the latest release**. The pins live at the top of `.github/workflows/scripts/config.py`.
 
 Useful `build-kernel.sh` options:
 
@@ -182,7 +182,7 @@ Useful `build-kernel.sh` options:
 |--------|---------|
 | `--no-pids` | Build without `CONFIG_CGROUP_PIDS` for Droidspaces (it is on by default, android13-5.15) |
 | `--kpm-legacy` | Old KPM patcher (KernelPatch 0.13.0) for SukiSU 41083 and older. Default is the pinned KernelPatch (0.14.0, KPM bridge ABI 2), which current SukiSU needs |
-| `--ksu-commit <ref>` | Other SukiSU-Ultra commit / tag / `main` |
+| `--ksu-commit <ref>` | Other SukiSU-Nova commit / tag / `main` |
 | `--ksu-version-code <n>` | Version number the kernel reports - must match your manager |
 | `--susfs-commit <ref>` | Other susfs commit, `branch=hash,...`, or `latest` |
 | `--no-ath9k` | Skip the ath9k_htc modules |
@@ -191,7 +191,7 @@ Useful `build-kernel.sh` options:
 
 ### Checking for updates: `check-release.sh`
 
-SukiSU-Ultra and SUSFS move fast, and the newest commits don't always fit together. `check-release.sh` finds the newest SukiSU-Ultra and susfs commits, applies the SUSFS patch in a throwaway tree with the same recovery code the build uses, and prints the exact build command. Hunks that `patch` could only apply with fuzz are checked too: code that landed outside a function stops it, anything new is shown as a warning. It checks the newest AmneziaWG commit the same way; one that doesn't fit is left out and the build keeps the last working one:
+SukiSU-Nova and SUSFS move fast, and the newest commits don't always fit together. `check-release.sh` finds the newest SukiSU-Nova and susfs commits, applies the SUSFS patch in a throwaway tree with the same recovery code the build uses, and prints the exact build command. Hunks that `patch` could only apply with fuzz are checked too: code that landed outside a function stops it, anything new is shown as a warning. It checks the newest AmneziaWG commit the same way; one that doesn't fit is left out and the build keeps the last working one:
 
 - **OK ... Build this** - new combination, patches cleanly.
 - **OK ... You're up to date** - nothing new.
@@ -199,11 +199,13 @@ SukiSU-Ultra and SUSFS move fast, and the newest commits don't always fit togeth
 
 After you build, flash and test, run it again and answer `1` to save the new pins in `config.py` (or `3` to blacklist a broken combination).
 
-`--susfs <commit>` tests one susfs commit instead of the branch HEAD, and `--ksu <commit>` one SukiSU-Ultra commit instead of main HEAD (for example the commit right before one susfs has not synced with yet - a STOP prints that command). The manager must be the build of that same commit.
+`--susfs <commit>` tests one susfs commit instead of the branch HEAD, and `--ksu <commit>` one SukiSU-Nova commit instead of main HEAD (for example the commit right before one susfs has not synced with yet - a STOP prints that command). The manager must be the build of that same commit.
 
 ### GitHub Actions
 
 The **Kernel Build** (one version) and **Build Kernels** (whole matrix) workflows use the same pins when their inputs are left empty. With all its fields left as they are, **Kernel Build** builds the same kernel as `./build-kernel.sh` with no flags (android13-5.15.223, AmneziaWG, ath9k_htc modules included). CI builds **Thin LTO** (Full LTO needs ~27 GB RAM), so they are not the tested release binaries. The **Check Release** workflow runs `check-release.sh` and writes on its Summary page what to put into Kernel Build for the newest commits that fit.
+
+Building from a fork: press **Sync fork** on your fork's GitHub page after every new release here, so your workflows get the same pins as that release.
 
 Kernel versions and Google tags come from `.github/workflows/config/matrix.json`, kept current by `update_matrix.py` and the scheduled **update-matrix** workflow. A sub_level that has no Google tag yet (like 223) is pinned to the newest commit for it on the `-lts` branch, and the default build uses that commit.
 
@@ -212,7 +214,7 @@ Kernel versions and Google tags come from `.github/workflows/config/matrix.json`
 ## Credits
 
 - **[ShirkNeko/GKI_KernelSU_SUSFS](https://github.com/ShirkNeko/GKI_KernelSU_SUSFS)** - the build system this started as a fork of.
-- **[SukiSU-Ultra](https://github.com/SukiSU-Ultra/SukiSU-Ultra)** and **[SukiSU_patch](https://github.com/SukiSU-Ultra/SukiSU_patch)** - root implementation, KPM and extra patches (ZRAM, hooks).
+- **[SukiSU-Nova](https://git.zako.shirkneko.top:20004/shirkneko/SukiSU)** and **[SukiSU_Patch](https://git.zako.shirkneko.top:20004/shirkneko/SukiSU_Patch)** - root implementation, KPM and extra patches (ZRAM, hooks).
 - **[susfs4ksu](https://gitlab.com/simonpunk/susfs4ksu)** - SUSFS.
 - **[WildKernels/kernel_patches](https://github.com/WildKernels/kernel_patches)** - BBRv3 backport.
 - **[amnezia-vpn/amneziawg-linux-kernel-module](https://github.com/amnezia-vpn/amneziawg-linux-kernel-module)** - AmneziaWG.

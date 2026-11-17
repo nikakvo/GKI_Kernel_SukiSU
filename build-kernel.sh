@@ -37,12 +37,8 @@ REPO_ROOT="$(find_repo_dir)" || {
 
 REPO_DIR="$REPO_ROOT/.github/workflows/scripts"
 MATRIX_FILE="$REPO_DIR/../config/matrix.json"
-# NOVA / FORGEJO COPY (~/sukisu-nova, branch forgejo): SukiSU comes from
-# ShirkNeko's Forgejo server (see SUKISU_FORGEJO in config.py). Own build
-# workspace and log names, so it never touches the main copy's
-# ~/gki-workspace or its build logs.
-WORKSPACE="$HOME/gki-workspace-nova"
-LOGFILE="$HOME/build-nova-$(date +%Y%m%d-%H%M%S).log"
+WORKSPACE="$HOME/gki-workspace"
+LOGFILE="$HOME/build-$(date +%Y%m%d-%H%M%S).log"
 
 # ---- CLI args ----
 # --ksu-commit <ref>: pin SukiSU-Ultra's kernel-side source to a tag/
@@ -393,7 +389,7 @@ fi
 #  Build menu
 # ============================================================
 echo "========================================"
-echo "  GKI KernelSU SUSFS - Build Menu (NOVA / Forgejo copy)"
+echo "  GKI KernelSU SUSFS - Build Menu"
 echo "========================================"
 # A raw commit SHA is shortened to 12 characters, a tag name is shown whole.
 if [[ "$KERNEL_TAG" =~ ^[0-9a-f]{40}$ ]]; then KERNEL_TAG_SHOW="${KERNEL_TAG:0:12}"; else KERNEL_TAG_SHOW="$KERNEL_TAG"; fi

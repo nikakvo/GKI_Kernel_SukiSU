@@ -60,7 +60,7 @@ on:
         type: string
         default: ''
       kernelsu_commit:
-        description: 'SukiSU-Ultra tag/branch/commit. Leave empty for the known-good pin in config.py (DEFAULT_KSU_REF - what the latest release was built from). "main" tracks the moving branch.'
+        description: 'SukiSU tag/branch/commit. Leave empty for the known-good pin in config.py (DEFAULT_KSU_REF - what the latest release was built from). "main" tracks the moving branch.'
         required: false
         type: string
         default: ''

@@ -52,11 +52,8 @@
 #
 # Read-only for the build workspace. Clones into a cache dir.
 #
-# NOVA / FORGEJO COPY (~/sukisu-nova, branch forgejo): SukiSU, SukiSU_Patch
-# and KernelPatch come from ShirkNeko's Forgejo server (SukiSU-Nova left
-# GitHub on 2026-11-16); SUSFS stays on GitLab. Its own cache
-# (~/.cache/gki-check-nova) and build workspace (~/gki-workspace-nova) keep
-# it apart from the main copy in ~/GKI_KernelSU_SUSFS-main.
+# SukiSU and SukiSU_Patch come from ShirkNeko's Forgejo server (SukiSU-Nova
+# left GitHub on 2026-11-16); SUSFS comes from GitLab.
 
 set -uo pipefail
 
@@ -66,7 +63,7 @@ FORGEJO="https://git.zako.shirkneko.top:20004/shirkneko"
 SUKI_URL="$FORGEJO/SukiSU.git"
 SUSFS_URL="https://gitlab.com/simonpunk/susfs4ksu.git"
 AWG_URL="https://github.com/amnezia-vpn/amneziawg-linux-kernel-module.git"
-CACHE="${GKI_CHECK_CACHE:-$HOME/.cache/gki-check-nova}"
+CACHE="${GKI_CHECK_CACHE:-$HOME/.cache/gki-check}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 BUILDER_DIR="$SCRIPT_DIR/.github/workflows/scripts"
 CONFIG_PY="$BUILDER_DIR/config.py"
@@ -86,7 +83,7 @@ while [ $# -gt 0 ]; do
         -h|--help)
             echo "Usage: $0 [--branch gki-android13-5.15|gki-android14-6.1|gki-android15-6.6] [--cache DIR] [--no-ask]"
             echo "          [--susfs <commit>]   test this susfs commit instead of the branch HEAD"
-            echo "          [--ksu <commit>]     test this SukiSU-Ultra commit instead of main HEAD"
+            echo "          [--ksu <commit>]     test this SukiSU commit instead of main HEAD"
             exit 0 ;;
         *) echo "Unknown argument: $1" >&2; exit 1 ;;
     esac
@@ -165,7 +162,7 @@ sync_repo() {   # $1=url $2=dir $3=label
         git clone -q --filter=blob:none --no-checkout "$1" "$2" || return 1
     fi
 }
-sync_repo "$SUKI_URL"  "$SUKI"  "SukiSU-Ultra" || exit 1
+sync_repo "$SUKI_URL"  "$SUKI"  "SukiSU"       || exit 1
 sync_repo "$SUSFS_URL" "$SUSFS" "susfs4ksu"    || exit 1
 # KPM image patcher (informational only, never stops the run)
 SKPATCH_URL="$FORGEJO/SukiSU_Patch.git"
@@ -348,7 +345,7 @@ CAND_SHA="$MAIN_SHA"; CAND_LABEL="main"
 if [ -n "$KSU_FORCE" ]; then
     CAND_SHA="$(sha_of "$SUKI" "$KSU_FORCE")"
     if [ -z "$CAND_SHA" ]; then
-        bad "--ksu $KSU_FORCE: no such commit in SukiSU-Ultra"; exit 1
+        bad "--ksu $KSU_FORCE: no such commit in SukiSU"; exit 1
     fi
     if ! git -C "$SUKI" merge-base --is-ancestor "$CAND_SHA" "$MAIN_SHA" 2>/dev/null; then
         bad "--ksu ${CAND_SHA:0:8} is not on main"; exit 1

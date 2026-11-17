@@ -118,7 +118,7 @@ jobs:
                   print("| Sub Level Version / OS Patch Level | leave the defaults (or a newer sub_level from matrix.json) |")
               else:
                   print("| Sub Level Version / OS Patch Level | an enabled row from matrix.json |")
-              print(f"| SukiSU-Ultra tag/branch/commit | `{flags.get('--ksu-commit', '')}` |")
+              print(f"| SukiSU tag/branch/commit | `{flags.get('--ksu-commit', '')}` |")
               print(f"| Version number SukiSU reports | `{flags.get('--ksu-version-code', '')}` |")
               print(f"| susfs4ksu pin | `{flags.get('--susfs-commit', '')}` |")
               print()
@@ -135,9 +135,11 @@ jobs:
                   print("This SukiSU needs the old KPM patcher (`--kpm-legacy`), which Kernel "
                         "Build cannot do - build it locally with build-kernel.sh.")
                   print()
-              print("The kernel and the manager must have the same version number: install "
-                    "the SukiSU-Ultra manager CI build for that commit "
-                    "([build-manager runs](https://github.com/SukiSU-Ultra/SukiSU-Ultra/actions/workflows/build-manager.yml)).")
+              print("The kernel and the Manager must have the same version number: install "
+                    "the SukiSU Manager for that commit - the official release when the commit "
+                    "is a tag ([releases](https://git.zako.shirkneko.top:20004/shirkneko/SukiSU/releases)), "
+                    "otherwise a CI build of that commit "
+                    "([Actions](https://git.zako.shirkneko.top:20004/shirkneko/SukiSU/actions)).")
               print()
 
           print("<details><summary>Full check-release.sh output</summary>")
