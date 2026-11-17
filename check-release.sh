@@ -333,6 +333,21 @@ repo_name_of() {   # $1=sha -> REPO_NAME from that commit's Kbuild (log line "<n
 hdr "SukiSU (Forgejo)"
 
 PIN_SHA="$(sha_of "$SUKI" "$PINNED_KSU_REF")"
+# The pin is a full hash. When SukiSU rewrites main or moves a tag (on
+# 2026-11-17 the 35000 pin b938c53c was left on no branch or tag), a fresh
+# clone doesn't have the pinned commit; Forgejo still gives it by hash, but
+# may drop it at its next git gc. kernel_builder.py fetches it the same way.
+PIN_STATE=ok
+if [ -z "$PIN_SHA" ] && [[ "$PINNED_KSU_REF" =~ ^[0-9a-f]{40}$ ]]; then
+    git -C "$SUKI" fetch -q origin "$PINNED_KSU_REF" 2>/dev/null \
+        && PIN_SHA="$(sha_of "$SUKI" "$PINNED_KSU_REF")"
+fi
+if [ -z "$PIN_SHA" ]; then
+    PIN_STATE=gone
+elif [ -z "$(git -C "$SUKI" branch -r --contains "$PIN_SHA" 2>/dev/null)" ] \
+     && [ -z "$(git -C "$SUKI" tag --list 'v[0-9]*' --contains "$PIN_SHA" 2>/dev/null)" ]; then
+    PIN_STATE=orphan
+fi
 MAIN_SHA="$(sha_of "$SUKI" origin/main)"
 MAIN_UAPI="$(uapi_of origin/main)"; : "${MAIN_UAPI:=?}"
 
@@ -388,6 +403,18 @@ else
     printf "  %-10s %-10s %-12s %s\n" "newest" "${CAND_SHA:0:8}" \
         "$(git -C "$SUKI" log -1 --format=%cs "$CAND_SHA")" "$CAND_CODE"
 fi
+
+case "$PIN_STATE" in
+    orphan)
+        warn "The pinned SukiSU ${PIN_SHA:0:8} is no longer on any branch or version tag"
+        echo "        (upstream rewrote main or moved a tag). It still builds - it is"
+        echo "        fetched by hash - but the server can drop it at any time. Build,"
+        echo "        test and release a newer commit soon, so the pin is on main again." ;;
+    gone)
+        warn "The pinned SukiSU ${PINNED_KSU_REF:0:8} can't be fetched from $SUKI_URL any more."
+        echo "        Nobody can build the current pin now (not CI, not forks). Build,"
+        echo "        test and release a newer commit." ;;
+esac
 
 KSU_NEW=0
 if [ "$CAND_SHA" != "$PIN_SHA" ]; then
