@@ -197,7 +197,7 @@ SukiSU-Nova and SUSFS move fast, and the newest commits don't always fit togethe
 - **OK ... You're up to date** - nothing new.
 - **STOP** - upstream changed something the pipeline doesn't handle yet; the last working command is printed instead.
 
-After you build, flash and test, run it again and answer `1` to save the new pins in `config.py` (or `3` to blacklist a broken combination).
+After you build, flash and test, run it again and answer `1`: it saves the new pins in `config.py`, commits only that file (`Pin SukiSU <code> + susfs <sha7>`) and pushes `main` to your `origin` (`--no-push` commits without pushing; if `config.py` already had other local edits it saves the pins but commits nothing). Answer `3` to blacklist a broken combination.
 
 `--susfs <commit>` tests one susfs commit instead of the branch HEAD, and `--ksu <commit>` one SukiSU-Nova commit instead of main HEAD (for example the commit right before one susfs has not synced with yet - a STOP prints that command). The manager must be the build of that same commit.
 

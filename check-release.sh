@@ -28,7 +28,10 @@
 #   4. prints the exact ./build-kernel.sh command to run,
 #   5. remembers that suggestion, and on the NEXT run asks whether you built,
 #      flashed and tested it - answer 1 and it updates the known-good pins
-#      in config.py by itself.
+#      in config.py by itself, commits ONLY config.py ("Pin SukiSU <code> +
+#      susfs <sha7>") and pushes main to origin (--no-push: commit only,
+#      nothing pushed). If config.py already had other local edits it saves
+#      the pins but commits nothing - you commit by hand then.
 #   5b. --susfs <commit> tests that one susfs commit instead of the branch
 #      HEAD (e.g. an older one that made a good kernel) and prints the
 #      commands for it. No fallbacks then. The list of newer commits it leaves
@@ -68,6 +71,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 BUILDER_DIR="$SCRIPT_DIR/.github/workflows/scripts"
 CONFIG_PY="$BUILDER_DIR/config.py"
 ASK=1
+PUSH=1
 SUSFS_FORCE=""
 KSU_FORCE=""
 
@@ -76,12 +80,14 @@ while [ $# -gt 0 ]; do
         --branch) BRANCH="$2"; shift 2 ;;
         --cache)  CACHE="$2"; shift 2 ;;
         --no-ask) ASK=0; shift ;;
+        --no-push) PUSH=0; shift ;;
         --susfs)  [ $# -ge 2 ] || { echo "--susfs needs a susfs commit" >&2; exit 1; }
                   SUSFS_FORCE="$2"; shift 2 ;;
         --ksu)    [ $# -ge 2 ] || { echo "--ksu needs a SukiSU-Ultra commit" >&2; exit 1; }
                   KSU_FORCE="$2"; shift 2 ;;
         -h|--help)
-            echo "Usage: $0 [--branch gki-android13-5.15|gki-android14-6.1|gki-android15-6.6] [--cache DIR] [--no-ask]"
+            echo "Usage: $0 [--branch gki-android13-5.15|gki-android14-6.1|gki-android15-6.6] [--cache DIR] [--no-ask] [--no-push]"
+            echo "          [--no-push]          answer 1 commits config.py but does not push"
             echo "          [--susfs <commit>]   test this susfs commit instead of the branch HEAD"
             echo "          [--ksu <commit>]     test this SukiSU commit instead of main HEAD"
             exit 0 ;;
@@ -249,6 +255,37 @@ PY
     mv -f "$tmp" "$CONFIG_PY"
 }
 
+commit_pins() {   # $1=commit message  $2=1 if config.py had no other edits  [$3=version code]
+    local g=(git -C "$SCRIPT_DIR") br sha
+    if [ "$2" != 1 ]; then
+        warn "config.py had other local edits (or this is not a git clone) -"
+        echo "        nothing committed. Commit and push config.py by hand."
+        return 0
+    fi
+    if "${g[@]}" diff --quiet HEAD -- "$CONFIG_PY"; then
+        info "config.py already holds these pins - nothing to commit."
+        return 0
+    fi
+    if ! "${g[@]}" commit -q -m "$1" -- "$CONFIG_PY"; then
+        warn "git commit failed - config.py is saved, commit and push it by hand."
+        return 0
+    fi
+    sha="$("${g[@]}" rev-parse --short HEAD)"
+    ok "Committed $sha  \"$1\"  (config.py only)"
+    br="$("${g[@]}" symbolic-ref -q --short HEAD)"
+    if [ "$PUSH" != 1 ]; then
+        echo "        --no-push: not pushed. Push it yourself: git push origin main"
+    elif [ "$br" != "main" ]; then
+        warn "Current branch is '${br:-detached}', not main - not pushed."
+    elif "${g[@]}" push -q origin main; then
+        ok "Pushed main to origin - CI and forks (after Sync fork) use the new pins."
+        [ -n "${3:-}" ] && echo "        Release: tag v$3 on $sha (the pushed main HEAD)."
+    else
+        warn "git push failed - the commit is local. Run:"
+        echo "        git pull --rebase origin main && git push origin main"
+    fi
+}
+
 if [ -s "$PENDING" ]; then
     # 5th field (AmneziaWG sha) is empty in files written by older versions
     read -r P_KSU P_SUSFS P_CODE P_DATE P_AWG < "$PENDING"
@@ -270,6 +307,18 @@ if [ -s "$PENDING" ]; then
         read -rp "  Choice [1/2/3, Enter = 2]: " ans
         case "$ans" in
             1)
+                # auto-commit only when config.py has no other local edits,
+                # so the commit holds the pins and nothing else
+                CFG_CLEAN=0
+                git -C "$SCRIPT_DIR" rev-parse -q --git-dir >/dev/null 2>&1 &&
+                    git -C "$SCRIPT_DIR" diff --quiet HEAD -- "$CONFIG_PY" 2>/dev/null && CFG_CLEAN=1
+                if [ "$BRANCH" = "gki-android13-5.15" ]; then
+                    COMMIT_MSG="Pin SukiSU $P_CODE + susfs ${P_SUSFS:0:7}"
+                else
+                    COMMIT_MSG="Pin susfs $BRANCH ${P_SUSFS:0:7}"
+                fi
+                [ -n "${P_AWG:-}" ] && [ "$P_AWG" != "$PINNED_AWG_REF" ] &&
+                    COMMIT_MSG="$COMMIT_MSG + AmneziaWG ${P_AWG:0:7}"
                 if save_pins "$P_KSU" "$P_SUSFS" "$P_CODE" "${P_AWG:-}"; then
                     rm -f "$PENDING"
                     [ "$BRANCH" = "gki-android13-5.15" ] && {
@@ -277,8 +326,7 @@ if [ -s "$PENDING" ]; then
                     PINNED_SUSFS[$BRANCH]="$P_SUSFS"
                     [ -n "${P_AWG:-}" ] && PINNED_AWG_REF="$P_AWG"
                     ok "Saved as the known-good build in config.py."
-                    echo "        Upload .github/workflows/scripts/config.py to GitHub too -"
-                    echo "        that also moves the default pins for CI and forks."
+                    commit_pins "$COMMIT_MSG" "$CFG_CLEAN" "$([ "$BRANCH" = "gki-android13-5.15" ] && echo "$P_CODE")"
                 else
                     bad "Could not update config.py - pins unchanged. Edit them by hand."
                 fi ;;
@@ -1283,6 +1331,6 @@ if [ "$KSU_NEW" = 1 ] || [ "$SUSFS_NEW" = 1 ] || [ "$AWG_NEW" = 1 ]; then
     fi
     echo "   3. After it boots: manager shows ${CAND_CODE}-${MAIN_UAPI} for both, check-features.sh is clean."
     echo "   4. Run ${B}./check-release.sh${N} again - it will ask if this build works."
-    echo "      Answer 1 and it saves these values into config.py by itself."
-    echo "      Then push config.py (gitsync push) and release as v${CAND_CODE}."
+    echo "      Answer 1 and it saves these values into config.py, commits"
+    echo "      config.py and pushes main by itself. Then release as v${CAND_CODE}."
 fi
