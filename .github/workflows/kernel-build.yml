@@ -43,7 +43,7 @@ on:
         description: 'Sub Level Version'
         required: true
         type: string
-        default: '223'
+        default: '225'
       os_patch_level:
         description: 'OS Patch Level'
         required: true

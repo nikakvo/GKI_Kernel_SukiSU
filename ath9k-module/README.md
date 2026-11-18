@@ -6,7 +6,7 @@ A SukiSU-Ultra / KernelSU module that makes a **TP-Link TL-WN722N v1**
 WiFi still working.
 
 This folder holds the **source** of the module. The ready-to-flash
-`ath9k_htc_vermeer-<kernel version>.zip` (e.g. `ath9k_htc_vermeer-5.15.223.zip`)
+`ath9k_htc_vermeer-<kernel version>.zip` (e.g. `ath9k_htc_vermeer-5.15.225.zip`)
 is attached to each kernel release. Use the one with the same version as the
 kernel you flash - modules from another kernel version will not load.
 

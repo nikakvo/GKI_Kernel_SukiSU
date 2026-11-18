@@ -6,10 +6,10 @@
 # build-kernel.sh and the GitHub Actions workflows run it after a successful
 # build. By hand, from this folder (ath9k-module/):
 #   ./make-ath9k-module.sh                       # newest ~/gki-workspace/android13-5.15-*/ath9k-modules
-#   ./make-ath9k-module.sh ~/gki-workspace/android13-5.15-223/ath9k-modules
+#   ./make-ath9k-module.sh ~/gki-workspace/android13-5.15-225/ath9k-modules
 #   ./make-ath9k-module.sh <ath9k-modules dir> <htc_9271-1.4.0.fw>
 #
-# Output: ath9k_htc_vermeer-<kernel version>.zip (e.g. ath9k_htc_vermeer-5.15.223.zip)
+# Output: ath9k_htc_vermeer-<kernel version>.zip (e.g. ath9k_htc_vermeer-5.15.225.zip)
 # in the current folder.
 set -euo pipefail
 
@@ -39,7 +39,7 @@ get_vermagic() {
 	fi
 }
 
-# The kernel version comes from ath.ko itself (5.15.223-android13-... -> 5.15.223),
+# The kernel version comes from ath.ko itself (5.15.225-android13-... -> 5.15.225),
 # so the zip name is right whatever the build folder is called.
 [ -f "$MODULES_DIR/ath.ko" ] || { echo "missing ath.ko in $MODULES_DIR"; exit 1; }
 VERMAGIC=$(get_vermagic "$MODULES_DIR/ath.ko")
@@ -47,7 +47,7 @@ KVER=${VERMAGIC%%-*}
 KVER=${KVER%% *}
 [[ "$KVER" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "ERROR: cannot read the kernel version from ath.ko vermagic '$VERMAGIC'"; exit 1; }
 
-# If the build folder is named <android>-<kernel>-<sublevel> (android13-5.15-223),
+# If the build folder is named <android>-<kernel>-<sublevel> (android13-5.15-225),
 # it must be the same kernel as the modules.
 BUILD_NAME=$(basename "$(dirname "$MODULES_DIR")")
 DIR_SUB=${BUILD_NAME##*-}

@@ -203,7 +203,7 @@ After you build, flash and test, run it again and answer `1`: it saves the new p
 
 ### GitHub Actions
 
-The **Kernel Build** (one version) and **Build Kernels** (whole matrix) workflows use the same pins when their inputs are left empty. With all its fields left as they are, **Kernel Build** builds the same kernel as `./build-kernel.sh` with no flags (android13-5.15.223, AmneziaWG, ath9k_htc modules included). CI builds **Thin LTO** (Full LTO needs ~27 GB RAM), so they are not the tested release binaries. The **Check Release** workflow runs `check-release.sh` and writes on its Summary page what to put into Kernel Build for the newest commits that fit.
+The **Kernel Build** (one version) and **Build Kernels** (whole matrix) workflows use the same pins when their inputs are left empty. With all its fields left as they are, **Kernel Build** builds the same kernel as `./build-kernel.sh` with no flags (android13-5.15.225, AmneziaWG, ath9k_htc modules included). CI builds **Thin LTO** (Full LTO needs ~27 GB RAM), so they are not the tested release binaries. The **Check Release** workflow runs `check-release.sh` and writes on its Summary page what to put into Kernel Build for the newest commits that fit.
 
 Building from a fork: press **Sync fork** on your fork's GitHub page after every new release here, so your workflows get the same pins as that release.
 

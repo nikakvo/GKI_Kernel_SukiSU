@@ -190,10 +190,10 @@ done
 # ---- Default values ----
 ANDROID_VERSION="android13"
 KERNEL_VERSION="5.15"
-SUB_LEVEL="223"
+SUB_LEVEL="225"
 OS_PATCH="2026-09"
 # Either a respin tag (android13-5.15.220_r00) or a raw commit SHA from
-# android.googlesource.com/kernel/common. This is the SHA of the 223 tree
+# android.googlesource.com/kernel/common. This is the SHA of the 225 tree
 # (LTS merge, same as matrix.json) that has been built and confirmed
 # booting on device.
 # Since 2026-11-11 the default build takes the commit from matrix.json
@@ -202,7 +202,7 @@ OS_PATCH="2026-09"
 # NOTE: this is the KERNEL source ref - do NOT paste a susfs4ksu commit
 # here. They are different repositories; the build will fail with an
 # HTTP 500 from googlesource if they get swapped.
-KERNEL_TAG="2316d138a3c3f2ec12cfb4b2f09ca9c95aa92ce5"
+KERNEL_TAG="0d108e1e8c7b51616fafc1e0c9bef100c9d97d86"
 # Set to "1" if KERNEL_TAG above is an LTS-merge respin (e.g.
 # android13-5.15.209_r00, dotted sub_level style) rather than a regular
 # date-based one (e.g. android13-5.15-2026-06_r4) - adds a "-lts" marker
@@ -359,7 +359,7 @@ check_dependencies
 # ---- Default kernel commit from matrix.json ----
 # The default build uses the matrix.json entry of SUB_LEVEL (enabled, one
 # match): update_matrix.py keeps an untagged LTS sub_level on the newest
-# commit of android13-5.15-lts for it, so this is always the newest 223.
+# commit of android13-5.15-lts for it, so this is always the newest 225.
 # The KERNEL_TAG / OS_PATCH / IS_LTS values above are only the fallback
 # when matrix.json can't be read.
 KERNEL_TAG_SRC="build-kernel.sh fallback"
