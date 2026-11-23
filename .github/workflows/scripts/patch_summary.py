@@ -20,6 +20,7 @@ STATUS_ICON = {"applied": "OK", "skipped": "-", "failed": "FAIL"}
 DISPLAY_NAMES = {
     "ptrace_leak_fix": "Ptrace Leak Fix",
     "unicode_bypass_fix": "Unicode Bypass Fix",
+    "usb_cdrom_size": "USB CD-ROM Size",
     "ntsync": "NTSync",
     "susfs": "SUSFS",
     "susfs_kernelsu_integration": "SUSFS<->KSU Integration",

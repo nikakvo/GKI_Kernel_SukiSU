@@ -31,7 +31,7 @@ Download the latest build from **[Releases](https://github.com/nikakvo/GKI_Kerne
 | Feature | What it gives you |
 |---------|-------------------|
 | **[SukiSU-Nova](https://git.zako.shirkneko.top:20004/shirkneko/SukiSU)** | Kernel-level root (built in, not LKM), with module preinit support |
-| **[SUSFS v2.3.0](https://gitlab.com/simonpunk/susfs4ksu)** | Kernel-side root hiding (paths, mounts, uname/cmdline spoofing). Needs the [userspace module](#susfs-userspace) |
+| **[SUSFS v2.4.0](https://gitlab.com/simonpunk/susfs4ksu)** | Kernel-side root hiding (paths, mounts, uname/cmdline spoofing). Needs the [userspace module](#susfs-userspace) |
 | **KPM** | Load KernelPatch modules at runtime |
 | **BBR v3** | Newer TCP congestion control (falls back to BBR v1 if the patch doesn't fit) |
 | **BIC, Westwood+, H-TCP** | Extra congestion control algorithms to switch to at runtime |
@@ -48,6 +48,7 @@ Download the latest build from **[Releases](https://github.com/nikakvo/GKI_Kerne
 | **NTSync** | `/dev/ntsync` for Wine/Winlator |
 | **[Baseband-guard](https://github.com/vc-teahouse/Baseband-guard)** | Blocks unauthorised writes to modem/baseband partitions |
 | **Ptrace leak fix, Unicode fix** | Upstream backports (ptrace race, UTF-8 normalisation bypass) |
+| **USB CD-ROM without the 2.36 GB cap** | The USB mass-storage gadget shows CD-ROM images (ISOs) at their full size, so DVD-sized Live and installer ISOs boot as CD-ROM from the phone (e.g. with DriveDroid-style apps) |
 | **ath9k_htc** | TP-Link TL-WN722N **v1** over OTG: monitor mode + injection, internal WiFi keeps working ([details](ath9k-module/README.md)) |
 
 ### Check what is active

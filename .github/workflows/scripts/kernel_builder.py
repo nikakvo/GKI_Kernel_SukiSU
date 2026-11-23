@@ -1842,6 +1842,40 @@ CONFIG_CIFS_XATTR=y
         else:
             self._mark("unicode_bypass_fix", "applied", detail)
 
+    def apply_usb_cdrom_size_fix(self):
+        """Lets the USB mass-storage gadget present CD-ROM images of any
+        size (drivers/usb/gadget/function/storage_common.c).
+
+        Stock fsg_lun_open() cuts a CD-ROM backing file to 256*60*75 - 1
+        blocks of 2048 bytes (about 2.36 GB, the largest address MSF can
+        encode) and logs "file too big ... using only first 1151999
+        blocks". Every DVD-sized ISO (Kali Live, Windows installers) is
+        then shown to the PC as a truncated disc and fails to boot as
+        CD-ROM - seen with PhoneDrive (Tears' DriveDroid replacement).
+
+        The patch removes the upper limit (the 300-block minimum stays)
+        and makes store_cdrom_address() clamp MSF replies at 255:59:74
+        instead of wrapping the minutes byte. READ CAPACITY and the
+        LBA forms of READ TOC / READ HEADER already use 32-bit addresses.
+        No exported symbol, struct or Kconfig changes - KMI unaffected.
+
+        Soft-fail like the other upstream-code fixes: a failure only
+        means CD-ROM images stay capped, visible in PATCH_STATUS.json.
+        """
+        logger.info("=== Applying USB mass-storage CD-ROM size fix ===")
+        patch_file = Path(__file__).parent / "patches" / "usb_cdrom_no_size_cap.patch"
+        ok, detail = self._apply_patch_with_dry_run(patch_file, self.work_dir / "common")
+        if not ok:
+            logger.warning(
+                f"USB CD-ROM size fix not applied ({detail}) - "
+                f"storage_common.c may have diverged from what this patch "
+                f"expects. The tree was left untouched; CD-ROM images stay "
+                f"capped at 2.36 GB."
+            )
+            self._mark("usb_cdrom_size", "failed", detail)
+        else:
+            self._mark("usb_cdrom_size", "applied", detail)
+
     # NTSync (drivers/misc/ntsync.c) emulates Windows NT synchronization
     # primitives in-kernel - useful for Winlator/Wine. It's mainline as of
     # Linux 6.14, so this backports it via two patches from kernel_patches:
@@ -6339,6 +6373,7 @@ CONFIG_CIFS_XATTR=y
             self._write_scmversion()
             self.apply_ptrace_leak_fix()
             self.apply_unicode_fix()
+            self.apply_usb_cdrom_size_fix()
             if self.config.use_ntsync:
                 self.apply_ntsync_patches()
             else:

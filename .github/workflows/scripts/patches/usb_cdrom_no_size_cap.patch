@@ -1,0 +1,37 @@
+--- a/drivers/usb/gadget/function/storage_common.c
++++ b/drivers/usb/gadget/function/storage_common.c
+@@ -243,12 +243,15 @@
+ 	min_sectors = 1;
+ 	if (curlun->cdrom) {
+ 		min_sectors = 300;	/* Smallest track is 300 frames */
+-		if (num_sectors >= 256*60*75) {
+-			num_sectors = 256*60*75 - 1;
+-			LINFO(curlun, "file too big: %s\n", filename);
+-			LINFO(curlun, "using only first %d blocks\n",
+-					(int) num_sectors);
+-		}
++		/*
++		 * No upper limit: the old cap (256*60*75 - 1 blocks, the
++		 * largest address MSF can encode, about 2.36 GB) cut every
++		 * DVD-sized ISO short, so hosts saw a truncated disc and
++		 * Live/installer ISOs failed to boot. READ CAPACITY and
++		 * LBA-format READ TOC/READ HEADER carry 32-bit addresses;
++		 * MSF replies above 255:59:74 are clamped in
++		 * store_cdrom_address().
++		 */
+ 	}
+ 	if (num_sectors < min_sectors) {
+ 		LINFO(curlun, "file too small: %s\n", filename);
+@@ -297,7 +300,12 @@
+ 		/*
+ 		 * Convert to Minutes-Seconds-Frames.
+ 		 * Sector size is already set to 2048 bytes.
++		 * MSF can't express more than 255:59:74; larger addresses
++		 * (images over about 2.36 GB) report that maximum instead of
++		 * wrapping the minutes byte to a small, wrong value.
+ 		 */
++		if (addr > 256*60*75 - 1 - 2*75)
++			addr = 256*60*75 - 1 - 2*75;
+ 		addr += 2*75;		/* Lead-in occupies 2 seconds */
+ 		dest[3] = addr % 75;	/* Frames */
+ 		addr /= 75;
