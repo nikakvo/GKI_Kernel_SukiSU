@@ -120,8 +120,8 @@ ANDROID_KERNEL_MAP = {
 # a hash is valid on exactly one). Branches not listed build from HEAD.
 # android13-5.15 is built, flashed and daily-driven; 6.1 / 6.6 are
 # verified to patch (incl. _recover_susfs_init_c) but not device-tested.
-DEFAULT_KSU_REF = "8350b50004b707350c8b72eac322dd48c443e48e"
-DEFAULT_KSU_VERSION_CODE = 35084
+DEFAULT_KSU_REF = "eeeb52ea7be8d8613b34142e956a5c08e8aa433c"
+DEFAULT_KSU_VERSION_CODE = 35100
 DEFAULT_SUSFS_PINS = {
     "gki-android13-5.15": "c1d1da42b74771944207ec45aaceff9c57e84985",
     "gki-android14-6.1": "273ae364c5b7c92ceb15634c9f075b6fc0501048",
